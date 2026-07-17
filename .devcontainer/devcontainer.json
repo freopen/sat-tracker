@@ -1,0 +1,16 @@
+{
+  "image": "ghcr.io/cachix/devenv/devcontainer:latest",
+  "runArgs": ["--tmpfs=/tmp:rw,exec,nosuid,nodev,mode=1777"],
+  "overrideCommand": false,
+  "updateContentCommand": "devenv test",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "jnoortheen.nix-ide",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "mkhl.direnv"
+      ]
+    }
+  }
+}
