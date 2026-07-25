@@ -3,4 +3,24 @@ name = "sat-tracker"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["durable-actions"]
+
 [dependencies]
+anyhow = "1"
+axum = "0.8"
+durable-actions = { path = "durable-actions" }
+figment = { version = "0.10", features = ["yaml"] }
+frankenstein = { version = "0.50", features = ["client-reqwest"] }
+mail-parser = "0.11"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3"
+wiremock = "0.6"

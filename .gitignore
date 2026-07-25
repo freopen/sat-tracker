@@ -1,6 +1,11 @@
 .devenv*
 .direnv/
 target/
+sat-tracker-state.json
+sat-tracker.sqlite
+sat-tracker.sqlite-shm
+sat-tracker.sqlite-wal
+config.yaml
 result
 result-*
 devenv.local.nix
