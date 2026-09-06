@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "group:all"
+  ],
+  "timezone": "Europe/Zurich",
+  "schedule": ["* 12 * * 5"],
+  "prCreation": "immediate",
+  "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": true,
+  "ignoreTests": false,
+  "packageRules": [
+    {
+      "description": "Bump the main crate patch version with Cargo dependency updates",
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "bumpVersion": "patch"
+    }
+  ]
+}
