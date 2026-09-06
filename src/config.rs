@@ -16,6 +16,8 @@ pub struct Config {
     pub safety_chat_id: i64,
     #[serde(default = "default_telegram_api_url")]
     pub telegram_api_url: String,
+    #[serde(default)]
+    pub telegram_webhook_url: String,
     pub telegram_bot_token: String,
 }
 

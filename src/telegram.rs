@@ -1,13 +1,16 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use durable_actions::{Handle, HandlerError};
 use frankenstein::{
     AsyncTelegramApi,
     client_reqwest::Bot,
-    methods::{GetUpdatesParams, SendMessageParams},
+    methods::{DeleteWebhookParams, GetUpdatesParams, SendMessageParams, SetWebhookParams},
     types::AllowedUpdate,
 };
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
 use tracing::error;
 
 use crate::{actions::ProcessTelegram, config::Config, state::Audience};
@@ -21,10 +24,12 @@ pub(crate) struct Telegram {
     bot: Bot,
     owner_chat_id: i64,
     safety_chat_id: i64,
+    polling_enabled: bool,
+    listener: Arc<Mutex<Option<AbortHandle>>>,
 }
 
 impl Telegram {
-    pub(crate) fn new(config: &Config) -> anyhow::Result<Self> {
+    pub(crate) async fn new(config: &Config) -> anyhow::Result<Self> {
         let api_url = format!(
             "{}/bot{}",
             config.telegram_api_url.trim_end_matches('/'),
@@ -51,11 +56,17 @@ impl Telegram {
         let client = frankenstein::reqwest::Client::builder()
             .retry(retry)
             .build()?;
-        Ok(Self {
+        let telegram = Self {
             bot: Bot::builder().api_url(api_url).client(client).build(),
             owner_chat_id: config.owner_chat_id,
             safety_chat_id: config.safety_chat_id,
-        })
+            polling_enabled: config.telegram_webhook_url.trim().is_empty(),
+            listener: Arc::new(Mutex::new(None)),
+        };
+        telegram
+            .configure_webhook(&config.telegram_webhook_url)
+            .await?;
+        Ok(telegram)
     }
 
     pub(crate) async fn send(&self, audience: Audience, text: &str) -> Result<(), HandlerError> {
@@ -77,9 +88,38 @@ impl Telegram {
         Ok(())
     }
 
-    pub(crate) fn spawn_listener(&self, handle: Handle) -> JoinHandle<()> {
+    async fn configure_webhook(&self, url: &str) -> anyhow::Result<()> {
+        if url.trim().is_empty() {
+            self.bot
+                .delete_webhook(&DeleteWebhookParams::builder().build())
+                .await?;
+        } else {
+            self.bot
+                .set_webhook(
+                    &SetWebhookParams::builder()
+                        .url(url.trim().to_owned())
+                        .build(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn start_listener(&self, handle: Handle) {
+        if !self.polling_enabled {
+            return;
+        }
         let telegram = self.clone();
-        tokio::spawn(async move { telegram.listen(handle).await })
+        let listener = tokio::spawn(async move { telegram.listen(handle).await });
+        let abort_handle = listener.abort_handle();
+        drop(listener);
+        self.listener.lock().unwrap().replace(abort_handle);
+    }
+
+    pub(crate) fn abort_listener(&self) {
+        if let Some(listener) = self.listener.lock().unwrap().take() {
+            listener.abort();
+        }
     }
 
     async fn listen(&self, handle: Handle) {

@@ -5,12 +5,16 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use axum::{body::Bytes, http::StatusCode};
+use axum::{
+    body::{Body, Bytes},
+    http::{Request as HttpRequest, StatusCode},
+};
 use durable_actions::Action;
 use regex::Regex;
 use rusqlite::Connection;
 use tempfile::TempDir;
 use tokio::time::sleep;
+use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
     matchers::{method, path},
@@ -19,7 +23,7 @@ use wiremock::{
 use crate::{
     App, Config,
     actions::{AlertAction, ProcessMail},
-    http::submit,
+    http::{router, submit},
     mail::{Signal, extract_location, parse},
     state::{
         ActiveHike, AlertParameters, AlertSignal, Audience, FINISHED_COOLDOWN, HikeState,
@@ -35,8 +39,20 @@ fn config(api_url: String) -> Config {
         owner_chat_id: 1,
         safety_chat_id: 2,
         telegram_api_url: api_url,
+        telegram_webhook_url: String::new(),
         telegram_bot_token: "test".into(),
     }
+}
+
+async fn mount_delete_webhook(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/bottest/deleteWebhook"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": true
+        })))
+        .mount(server)
+        .await;
 }
 
 async fn telegram_server(delay: Duration) -> MockServer {
@@ -56,6 +72,7 @@ async fn telegram_server(delay: Duration) -> MockServer {
         ))
         .mount(&server)
         .await;
+    mount_delete_webhook(&server).await;
     server
 }
 
@@ -306,6 +323,7 @@ async fn telegram_listener_enqueues_owner_commands() {
         })))
         .mount(&server)
         .await;
+    mount_delete_webhook(&server).await;
 
     let owner_ok = telegram_update(42, 1, 1_700_000_000, "/ok");
     let foreign_ok = telegram_update(40, 2, 1_700_000_000, "/ok");
@@ -365,6 +383,75 @@ async fn telegram_listener_enqueues_owner_commands() {
             .get("offset")
             == Some(&serde_json::json!(43))
     }));
+
+    app.shutdown();
+    runner.await.unwrap();
+}
+
+#[tokio::test]
+async fn telegram_webhook_registers_and_forwards_updates() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest/setWebhook"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": true
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 1,
+                "date": 0,
+                "chat": {"id": 1, "type": "private"},
+                "text": "accepted"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let mut configuration = config(server.uri());
+    configuration.telegram_webhook_url = "https://tracker.example/tg".to_owned();
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("tracker.sqlite");
+    let (app, runner) = App::start(configuration, &path).await.unwrap();
+    let app = Arc::new(app);
+
+    let update = telegram_update(42, 1, 1_700_000_000, "/ok");
+    let response = router(Arc::clone(&app))
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/tg")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&update).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    wait_for_state(&path, |state| matches!(state.hike, HikeState::Active(_))).await;
+    wait_for_requests(&server, 1).await;
+    sleep(Duration::from_millis(25)).await;
+
+    let requests = server.received_requests().await.unwrap();
+    let set_webhook = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/setWebhook"))
+        .expect("webhook registration request");
+    assert_eq!(
+        set_webhook.body_json::<serde_json::Value>().unwrap()["url"],
+        "https://tracker.example/tg"
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path().ends_with("/getUpdates"))
+    );
 
     app.shutdown();
     runner.await.unwrap();
@@ -544,13 +631,14 @@ async fn alert_revalidates_and_records_delivery_only_after_success() {
         .respond_with(ResponseTemplate::new(400))
         .mount(&failing)
         .await;
+    mount_delete_webhook(&failing).await;
     let last_ok_at = SystemTime::now() - OWNER_AFTER - Duration::from_secs(1);
     let mut state = TrackerState {
         hike: HikeState::Active(active(last_ok_at)),
         ..TrackerState::default()
     };
     let action = AlertAction {
-        telegram: Telegram::new(&config(failing.uri())).unwrap(),
+        telegram: Telegram::new(&config(failing.uri())).await.unwrap(),
     };
     let alert = AlertParameters {
         expected_last_ok_at: last_ok_at,
@@ -570,7 +658,7 @@ async fn alert_revalidates_and_records_delivery_only_after_success() {
 
     let working = telegram_server(Duration::ZERO).await;
     let action = AlertAction {
-        telegram: Telegram::new(&config(working.uri())).unwrap(),
+        telegram: Telegram::new(&config(working.uri())).await.unwrap(),
     };
     action
         .run(&mut state, AlertSignal::Overdue(alert.clone()))
@@ -592,7 +680,7 @@ async fn alert_revalidates_and_records_delivery_only_after_success() {
 #[tokio::test]
 async fn alert_payload_is_delivered_once() {
     let server = telegram_server(Duration::ZERO).await;
-    let telegram = Telegram::new(&config(server.uri())).unwrap();
+    let telegram = Telegram::new(&config(server.uri())).await.unwrap();
     let recovered_at = SystemTime::now();
     let hike = active(recovered_at);
     let mut state = TrackerState {
@@ -631,6 +719,7 @@ async fn failed_notification_is_recovered_after_reopen() {
         .respond_with(ResponseTemplate::new(400))
         .mount(&failing)
         .await;
+    mount_delete_webhook(&failing).await;
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("tracker.sqlite");
     let (app, runner) = App::start(config(failing.uri()), &path).await.unwrap();

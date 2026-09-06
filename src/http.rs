@@ -3,17 +3,23 @@ use std::{sync::Arc, time::SystemTime};
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Json, State},
     http::StatusCode,
     routing::{get, post},
 };
+use frankenstein::updates::Update;
 use tracing::error;
 
-use crate::{actions::ProcessMail, app::App, state::RawMail};
+use crate::{
+    actions::{ProcessMail, ProcessTelegram},
+    app::App,
+    state::RawMail,
+};
 
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/mail", post(mail))
+        .route("/tg", post(telegram))
         .route("/healthz", get(health))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(app)
@@ -35,6 +41,16 @@ async fn mail(State(app): State<Arc<App>>, body: Bytes) -> StatusCode {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(error) => {
             error!(%error, "failed to durably enqueue mail");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+async fn telegram(State(app): State<Arc<App>>, Json(update): Json<Update>) -> StatusCode {
+    match app.handle.enqueue::<ProcessTelegram>(&update).await {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(error) => {
+            error!(%error, "failed to durably enqueue Telegram update");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
