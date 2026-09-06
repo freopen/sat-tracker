@@ -1,46 +1,64 @@
 use durable_actions::{Action, HandlerError, async_trait};
 
 use crate::{
-    state::{Audience, AudienceEventKey, HikeState, TrackerState, format_time, location_suffix},
+    actions::AlertAction,
+    state::{Audience, Event, FinishedHike, HikeState, TrackerState, format_time, location_suffix},
     telegram::Telegram,
 };
 
-pub(crate) struct NotifyFinished {
+pub(crate) struct FinishedAction {
     pub(crate) telegram: Telegram,
 }
 
 #[async_trait]
-impl Action for NotifyFinished {
-    const NAME: &'static str = "notify-finished";
+impl Action for FinishedAction {
+    const NAME: &'static str = "finished";
     type State = TrackerState;
-    type Parameters = AudienceEventKey;
+    type Parameters = Event;
 
-    async fn run(
-        &self,
-        state: &mut TrackerState,
-        key: AudienceEventKey,
-    ) -> Result<(), HandlerError> {
-        let HikeState::Finished(finished) = &mut state.hike else {
-            return Ok(());
+    async fn run(&self, state: &mut TrackerState, event: Event) -> Result<(), HandlerError> {
+        let (finished, text) = {
+            let HikeState::Active(hike) = &mut state.hike else {
+                return Ok(());
+            };
+            if event.event_at < hike.last_event_at {
+                return Ok(());
+            }
+
+            cancel_deadlines(hike)?;
+            let text = format!(
+                "InReach hike FINISHED at {}.{}\n\n{}",
+                format_time(event.event_at),
+                location_suffix(event.location.as_deref()),
+                event.body
+            );
+            let finished = FinishedHike {
+                event_at: event.event_at,
+                body: event.body,
+                location: event.location,
+                owner_notified: false,
+                safety_notified: false,
+            };
+            (finished, text)
         };
-        let already_notified = match key.audience {
-            Audience::Owner => finished.owner_notified,
-            Audience::Safety => finished.safety_notified,
-        };
-        if finished.event_at != key.event_at || already_notified {
-            return Ok(());
-        }
-        let text = format!(
-            "InReach hike FINISHED at {}.{}\n\n{}",
-            format_time(finished.event_at),
-            location_suffix(finished.location.as_deref()),
-            finished.body
-        );
-        self.telegram.send(key.audience, &text).await?;
-        match key.audience {
-            Audience::Owner => finished.owner_notified = true,
-            Audience::Safety => finished.safety_notified = true,
-        }
+
+        self.telegram.send(Audience::Owner, &text).await?;
+        self.telegram.send(Audience::Safety, &text).await?;
+        state.hike = HikeState::Finished(FinishedHike {
+            owner_notified: true,
+            safety_notified: true,
+            ..finished
+        });
         Ok(())
     }
+}
+
+fn cancel_deadlines(hike: &mut crate::state::ActiveHike) -> Result<(), durable_actions::Error> {
+    if let Some(id) = hike.owner_alert_action.take() {
+        AlertAction::cancel(id)?;
+    }
+    if let Some(id) = hike.safety_alert_action.take() {
+        AlertAction::cancel(id)?;
+    }
+    Ok(())
 }

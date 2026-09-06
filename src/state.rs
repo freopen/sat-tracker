@@ -64,22 +64,20 @@ pub(crate) struct Event {
     pub(crate) location: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub(crate) struct EventKey {
-    pub(crate) event_at: SystemTime,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub(crate) struct AudienceEventKey {
-    pub(crate) event_at: SystemTime,
-    pub(crate) audience: Audience,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct AlertParameters {
     pub(crate) expected_last_ok_at: SystemTime,
     pub(crate) audience: Audience,
     pub(crate) payload: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) enum AlertSignal {
+    Unrecognized {
+        event: Event,
+        expected_last_ok_at: Option<SystemTime>,
+    },
+    Overdue(AlertParameters),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

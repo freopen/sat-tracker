@@ -12,17 +12,17 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 use tokio::time::sleep;
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
+    Mock, MockServer, Request, ResponseTemplate,
     matchers::{method, path},
 };
 
 use crate::{
     App, Config,
-    actions::{DeliverAlert, NotifyRecovery, ProcessMail},
+    actions::{AlertAction, ProcessMail},
     http::submit,
-    mail::{Classification, extract_location, parse},
+    mail::{Signal, extract_location, parse},
     state::{
-        ActiveHike, AlertParameters, Audience, AudienceEventKey, FINISHED_COOLDOWN, HikeState,
+        ActiveHike, AlertParameters, AlertSignal, Audience, FINISHED_COOLDOWN, HikeState,
         OWNER_AFTER, RawMail, TrackerState, push_bounded,
     },
     telegram::{Telegram, split},
@@ -80,7 +80,7 @@ async fn enqueue_at(app: &App, id: &str, body: &str, received_at: SystemTime) {
 async fn wait_for_requests(server: &MockServer, count: usize) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if server.received_requests().await.unwrap().len() >= count {
+            if send_requests(server).await.len() >= count {
                 return;
             }
             sleep(Duration::from_millis(10)).await;
@@ -88,6 +88,28 @@ async fn wait_for_requests(server: &MockServer, count: usize) {
     })
     .await
     .unwrap();
+}
+
+async fn send_requests(server: &MockServer) -> Vec<Request> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/sendMessage"))
+        .collect()
+}
+
+fn telegram_update(update_id: u32, chat_id: i64, date: u64, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "update_id": update_id,
+        "message": {
+            "message_id": update_id,
+            "date": date,
+            "chat": {"id": chat_id, "type": "private"},
+            "text": text,
+        }
+    })
 }
 
 fn read_state(path: &Path) -> TrackerState {
@@ -140,7 +162,7 @@ fn parses_classifies_clamps_and_extracts_quoted_printable_mail() {
         },
         &config("http://localhost".into()),
     );
-    assert_eq!(parsed.classification, Classification::Ok);
+    assert_eq!(parsed.signal, Signal::Ok);
     assert_eq!(parsed.event.event_at, received_at);
     assert_eq!(parsed.event.message_id.as_deref(), Some("future"));
     assert_eq!(
@@ -155,7 +177,7 @@ fn parses_classifies_clamps_and_extracts_quoted_printable_mail() {
         },
         &config("http://localhost".into()),
     );
-    assert_eq!(ambiguous.classification, Classification::Unrecognized);
+    assert_eq!(ambiguous.signal, Signal::Alert);
 
     let synthetic = concat!(
         "From: Garmin InReach <noreply@example.test>\r\n",
@@ -177,7 +199,7 @@ fn parses_classifies_clamps_and_extracts_quoted_printable_mail() {
         },
         &config("http://localhost".into()),
     );
-    assert_eq!(parsed.classification, Classification::Ok);
+    assert_eq!(parsed.signal, Signal::Ok);
     assert_eq!(
         parsed.event.location.as_deref(),
         Some(
@@ -230,7 +252,7 @@ async fn lifecycle_is_durable_deduplicated_and_ignores_finish_while_idle() {
     })
     .await;
     assert!(matches!(read_state(&path).hike, HikeState::Idle));
-    assert!(server.received_requests().await.unwrap().is_empty());
+    assert!(send_requests(&server).await.is_empty());
 
     assert_eq!(
         submit_mail(&app, "ok-1", "ALL OK").await,
@@ -242,7 +264,7 @@ async fn lifecycle_is_durable_deduplicated_and_ignores_finish_while_idle() {
         StatusCode::NO_CONTENT
     );
     sleep(Duration::from_millis(50)).await;
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(send_requests(&server).await.len(), 1);
 
     assert_eq!(
         submit_mail(&app, "finish-1", "FINISHED").await,
@@ -266,6 +288,86 @@ async fn lifecycle_is_durable_deduplicated_and_ignores_finish_while_idle() {
             "finish-1".to_owned()
         ])
     );
+}
+
+#[tokio::test]
+async fn telegram_listener_enqueues_owner_commands() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 1,
+                "date": 0,
+                "chat": {"id": 1, "type": "private"},
+                "text": "accepted"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let owner_ok = telegram_update(42, 1, 1_700_000_000, "/ok");
+    let foreign_ok = telegram_update(40, 2, 1_700_000_000, "/ok");
+    let owner_finished = telegram_update(43, 1, 1_700_000_060, "/finished");
+    Mock::given(method("POST"))
+        .and(path("/bottest/getUpdates"))
+        .respond_with(move |request: &Request| {
+            let offset = serde_json::from_slice::<serde_json::Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("offset").and_then(serde_json::Value::as_i64));
+            let updates = match offset {
+                Some(0) => vec![foreign_ok.clone(), owner_ok.clone()],
+                Some(43) => vec![owner_finished.clone()],
+                _ => Vec::new(),
+            };
+            let delay = if updates.is_empty() {
+                Duration::from_millis(25)
+            } else {
+                Duration::ZERO
+            };
+            ResponseTemplate::new(200)
+                .set_delay(delay)
+                .set_body_json(serde_json::json!({"ok": true, "result": updates}))
+        })
+        .mount(&server)
+        .await;
+
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("tracker.sqlite");
+    let (app, runner) = App::start(config(server.uri()), &path).await.unwrap();
+    let app = Arc::new(app);
+
+    wait_for_state(&path, |state| {
+        matches!(&state.hike, HikeState::Finished(finished) if finished.body == "/finished")
+    })
+    .await;
+    wait_for_requests(&server, 3).await;
+
+    let updates = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/getUpdates"))
+        .collect::<Vec<_>>();
+    assert!(updates.iter().any(|request| {
+        request
+            .body_json::<serde_json::Value>()
+            .unwrap()
+            .get("offset")
+            == Some(&serde_json::json!(0))
+    }));
+    assert!(updates.iter().any(|request| {
+        request
+            .body_json::<serde_json::Value>()
+            .unwrap()
+            .get("offset")
+            == Some(&serde_json::json!(43))
+    }));
+
+    app.shutdown();
+    runner.await.unwrap();
 }
 
 #[tokio::test]
@@ -338,7 +440,7 @@ async fn ok_after_unrecognized_alert_sends_safety_recovery() {
     )
     .await;
 
-    let requests = server.received_requests().await.unwrap();
+    let requests = send_requests(&server).await;
     let alert_body = String::from_utf8_lossy(&requests[1].body);
     assert!(alert_body.contains("SAFETY ALERT"));
     assert!(alert_body.contains("raw unrecognized payload"));
@@ -447,7 +549,7 @@ async fn alert_revalidates_and_records_delivery_only_after_success() {
         hike: HikeState::Active(active(last_ok_at)),
         ..TrackerState::default()
     };
-    let action = DeliverAlert {
+    let action = AlertAction {
         telegram: Telegram::new(&config(failing.uri())).unwrap(),
     };
     let alert = AlertParameters {
@@ -455,29 +557,40 @@ async fn alert_revalidates_and_records_delivery_only_after_success() {
         audience: Audience::Owner,
         payload: "owner timeout payload".to_owned(),
     };
-    assert!(action.run(&mut state, alert.clone()).await.is_err());
+    assert!(
+        action
+            .run(&mut state, AlertSignal::Overdue(alert.clone()))
+            .await
+            .is_err()
+    );
     let HikeState::Active(hike) = &state.hike else {
         panic!("expected active hike");
     };
     assert!(!hike.owner_alerted);
 
     let working = telegram_server(Duration::ZERO).await;
-    let action = DeliverAlert {
+    let action = AlertAction {
         telegram: Telegram::new(&config(working.uri())).unwrap(),
     };
-    action.run(&mut state, alert.clone()).await.unwrap();
-    action.run(&mut state, alert).await.unwrap();
+    action
+        .run(&mut state, AlertSignal::Overdue(alert.clone()))
+        .await
+        .unwrap();
+    action
+        .run(&mut state, AlertSignal::Overdue(alert))
+        .await
+        .unwrap();
     let HikeState::Active(hike) = &state.hike else {
         panic!("expected active hike");
     };
     assert!(hike.owner_alerted);
-    assert_eq!(working.received_requests().await.unwrap().len(), 1);
-    let requests = working.received_requests().await.unwrap();
+    assert_eq!(send_requests(&working).await.len(), 1);
+    let requests = send_requests(&working).await;
     assert!(String::from_utf8_lossy(&requests[0].body).contains("owner timeout payload"));
 }
 
 #[tokio::test]
-async fn alert_payload_triggers_one_safety_recovery() {
+async fn alert_payload_is_delivered_once() {
     let server = telegram_server(Duration::ZERO).await;
     let telegram = Telegram::new(&config(server.uri())).unwrap();
     let recovered_at = SystemTime::now();
@@ -487,7 +600,7 @@ async fn alert_payload_triggers_one_safety_recovery() {
         processed_ids: VecDeque::from(["unknown".to_owned()]),
     };
 
-    let alert = DeliverAlert {
+    let alert = AlertAction {
         telegram: telegram.clone(),
     };
     let parameters = AlertParameters {
@@ -495,24 +608,19 @@ async fn alert_payload_triggers_one_safety_recovery() {
         audience: Audience::Safety,
         payload: "SAFETY ALERT: unrecognized\n\nambiguous".to_owned(),
     };
-    alert.run(&mut state, parameters.clone()).await.unwrap();
-    alert.run(&mut state, parameters).await.unwrap();
+    alert
+        .run(&mut state, AlertSignal::Overdue(parameters.clone()))
+        .await
+        .unwrap();
+    alert
+        .run(&mut state, AlertSignal::Overdue(parameters.clone()))
+        .await
+        .unwrap();
     let HikeState::Active(hike) = &state.hike else {
         panic!("expected active hike");
     };
     assert!(hike.safety_alerted);
-    let recovery = NotifyRecovery { telegram };
-    let recovery_key = AudienceEventKey {
-        event_at: recovered_at,
-        audience: Audience::Safety,
-    };
-    recovery.run(&mut state, recovery_key).await.unwrap();
-    recovery.run(&mut state, recovery_key).await.unwrap();
-    let HikeState::Active(hike) = &state.hike else {
-        panic!("expected active hike");
-    };
-    assert!(!hike.safety_alerted);
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(send_requests(&server).await.len(), 1);
 }
 
 #[tokio::test]
@@ -531,10 +639,7 @@ async fn failed_notification_is_recovered_after_reopen() {
         StatusCode::NO_CONTENT
     );
     assert!(runner.await.is_err());
-    let HikeState::Active(hike) = read_state(&path).hike else {
-        panic!("expected active hike");
-    };
-    assert!(!hike.owner_started_notified);
+    assert!(matches!(read_state(&path).hike, HikeState::Idle));
 
     let working = telegram_server(Duration::ZERO).await;
     let (app, runner) = App::start(config(working.uri()), &path).await.unwrap();

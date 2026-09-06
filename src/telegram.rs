@@ -1,9 +1,20 @@
-use durable_actions::HandlerError;
-use frankenstein::{AsyncTelegramApi, client_reqwest::Bot, methods::SendMessageParams};
+use std::time::Duration;
 
-use crate::{config::Config, state::Audience};
+use durable_actions::{Handle, HandlerError};
+use frankenstein::{
+    AsyncTelegramApi,
+    client_reqwest::Bot,
+    methods::{GetUpdatesParams, SendMessageParams},
+    types::AllowedUpdate,
+};
+use tokio::task::JoinHandle;
+use tracing::error;
+
+use crate::{actions::ProcessTelegram, config::Config, state::Audience};
 
 const TELEGRAM_CHUNK: usize = 4000;
+const LONG_POLL_TIMEOUT: u32 = 30;
+const RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub(crate) struct Telegram {
@@ -64,6 +75,41 @@ impl Telegram {
                 .map_err(|error| Box::new(error) as HandlerError)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn spawn_listener(&self, handle: Handle) -> JoinHandle<()> {
+        let telegram = self.clone();
+        tokio::spawn(async move { telegram.listen(handle).await })
+    }
+
+    async fn listen(&self, handle: Handle) {
+        let mut offset = 0_i64;
+        loop {
+            let params = GetUpdatesParams::builder()
+                .offset(offset)
+                .limit(100)
+                .timeout(LONG_POLL_TIMEOUT)
+                .allowed_updates(vec![AllowedUpdate::Message])
+                .build();
+            let updates = match self.bot.get_updates(&params).await {
+                Ok(response) => response.result,
+                Err(error) => {
+                    error!(%error, "telegram long polling failed");
+                    tokio::time::sleep(RETRY_DELAY).await;
+                    continue;
+                }
+            };
+
+            for update in updates {
+                let update_id = update.update_id;
+                if let Err(error) = handle.enqueue::<ProcessTelegram>(&update).await {
+                    error!(%error, update_id, "failed to durably enqueue Telegram update");
+                    tokio::time::sleep(RETRY_DELAY).await;
+                    break;
+                }
+                offset = i64::from(update_id) + 1;
+            }
+        }
     }
 }
 

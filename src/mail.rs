@@ -10,15 +10,15 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Classification {
+pub(crate) enum Signal {
     Ok,
     Finished,
-    Unrecognized,
+    Alert,
 }
 
 pub(crate) struct ParsedMail {
     pub(crate) event: Event,
-    pub(crate) classification: Classification,
+    pub(crate) signal: Signal,
 }
 
 pub(crate) fn parse(raw: RawMail, config: &Config) -> ParsedMail {
@@ -48,10 +48,10 @@ pub(crate) fn parse(raw: RawMail, config: &Config) -> ParsedMail {
     };
     let ok = config.ok_regex.is_match(&body);
     let finished = config.finished_regex.is_match(&body);
-    let classification = match (ok, finished) {
-        (true, false) => Classification::Ok,
-        (false, true) => Classification::Finished,
-        _ => Classification::Unrecognized,
+    let signal = match (ok, finished) {
+        (true, false) => Signal::Ok,
+        (false, true) => Signal::Finished,
+        _ => Signal::Alert,
     };
 
     ParsedMail {
@@ -61,7 +61,7 @@ pub(crate) fn parse(raw: RawMail, config: &Config) -> ParsedMail {
             location: extract_location(&body),
             body,
         },
-        classification,
+        signal,
     }
 }
 

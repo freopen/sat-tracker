@@ -1,21 +1,46 @@
 use durable_actions::{Action, HandlerError, async_trait};
 
 use crate::{
-    state::{AlertParameters, Audience, HikeState, TrackerState},
+    state::{AlertParameters, AlertSignal, Audience, HikeState, TrackerState, format_time},
     telegram::Telegram,
 };
 
-pub(crate) struct DeliverAlert {
+pub(crate) struct AlertAction {
     pub(crate) telegram: Telegram,
 }
 
 #[async_trait]
-impl Action for DeliverAlert {
-    const NAME: &'static str = "deliver-alert";
+impl Action for AlertAction {
+    const NAME: &'static str = "alert";
     type State = TrackerState;
-    type Parameters = AlertParameters;
+    type Parameters = AlertSignal;
 
-    async fn run(
+    async fn run(&self, state: &mut TrackerState, signal: AlertSignal) -> Result<(), HandlerError> {
+        let alert = match signal {
+            AlertSignal::Unrecognized {
+                event,
+                expected_last_ok_at: Some(expected_last_ok_at),
+            } => AlertParameters {
+                expected_last_ok_at,
+                audience: Audience::Safety,
+                payload: format!(
+                    "SAFETY ALERT: unrecognized InReach message\nEvent time: {}\n\n{}",
+                    format_time(event.event_at),
+                    event.body
+                ),
+            },
+            AlertSignal::Unrecognized {
+                expected_last_ok_at: None,
+                ..
+            } => return Ok(()),
+            AlertSignal::Overdue(alert) => alert,
+        };
+        self.deliver(state, alert).await
+    }
+}
+
+impl AlertAction {
+    async fn deliver(
         &self,
         state: &mut TrackerState,
         alert: AlertParameters,
