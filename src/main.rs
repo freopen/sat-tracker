@@ -3,8 +3,28 @@ use std::{future::IntoFuture, net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use sat_tracker::{App, Config, router};
 use tokio::net::TcpListener;
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    let terminate = async {
+        let mut signal =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        signal.recv().await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,9 +44,7 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(address).await?;
     info!(%address, "listening");
     let server = axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .into_future();
     tokio::pin!(server);
     tokio::pin!(runner);
