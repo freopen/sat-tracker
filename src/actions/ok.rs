@@ -8,6 +8,7 @@ use crate::{
     },
     telegram::Telegram,
 };
+use tracing::{info, warn};
 
 pub(crate) struct OkAction {
     pub(crate) telegram: Telegram,
@@ -28,6 +29,10 @@ impl Action for OkAction {
             HikeState::Finished(finished)
                 if event.event_at <= finished.event_at + FINISHED_COOLDOWN
         ) {
+            warn!(
+                event_at = %format_time(event.event_at),
+                "OK action ignored during finished-hike cooldown"
+            );
             return Ok(());
         }
         self.start_hike(state, event).await
@@ -45,6 +50,11 @@ impl OkAction {
                 return Ok(());
             };
             if event.event_at <= hike.last_ok_at {
+                warn!(
+                    event_at = %format_time(event.event_at),
+                    last_ok_at = %format_time(hike.last_ok_at),
+                    "OK action ignored stale event"
+                );
                 return Ok(());
             }
 
@@ -81,6 +91,19 @@ impl OkAction {
             return Ok(());
         };
         schedule_deadlines(hike)?;
+        if owner_recovery || safety_recovery {
+            info!(
+                event_at = %format_time(event_at),
+                owner_recovery,
+                safety_recovery,
+                "OK action resulted in contact recovery"
+            );
+        } else {
+            info!(
+                event_at = %format_time(event_at),
+                "OK action refreshed active hike"
+            );
+        }
         Ok(())
     }
 
@@ -107,6 +130,10 @@ impl OkAction {
         hike.owner_started_notified = true;
         schedule_deadlines(&mut hike)?;
         state.hike = HikeState::Active(hike);
+        info!(
+            event_at = %format_time(event.event_at),
+            "OK action resulted in starting a new hike"
+        );
         Ok(())
     }
 }

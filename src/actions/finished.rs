@@ -5,6 +5,7 @@ use crate::{
     state::{Audience, Event, FinishedHike, HikeState, TrackerState, format_time, location_suffix},
     telegram::Telegram,
 };
+use tracing::{info, warn};
 
 pub(crate) struct FinishedAction {
     pub(crate) telegram: Telegram,
@@ -19,9 +20,15 @@ impl Action for FinishedAction {
     async fn run(&self, state: &mut TrackerState, event: Event) -> Result<(), HandlerError> {
         let (finished, text) = {
             let HikeState::Active(hike) = &mut state.hike else {
+                warn!("finished action ignored because no hike is active");
                 return Ok(());
             };
             if event.event_at < hike.last_event_at {
+                warn!(
+                    event_at = %format_time(event.event_at),
+                    last_event_at = %format_time(hike.last_event_at),
+                    "finished action ignored stale event"
+                );
                 return Ok(());
             }
 
@@ -49,6 +56,10 @@ impl Action for FinishedAction {
             safety_notified: true,
             ..finished
         });
+        info!(
+            event_at = %format_time(event.event_at),
+            "finished action resulted in completing the hike"
+        );
         Ok(())
     }
 }

@@ -11,7 +11,7 @@ use frankenstein::{
     types::AllowedUpdate,
 };
 use tokio::task::AbortHandle;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{actions::ProcessTelegram, config::Config, state::Audience};
 
@@ -142,6 +142,7 @@ impl Telegram {
 
             for update in updates {
                 let update_id = update.update_id;
+                info!(update_id, "new Telegram update");
                 if let Err(error) = handle.enqueue::<ProcessTelegram>(&update).await {
                     error!(%error, update_id, "failed to durably enqueue Telegram update");
                     tokio::time::sleep(RETRY_DELAY).await;

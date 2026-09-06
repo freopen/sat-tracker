@@ -1,4 +1,5 @@
 use durable_actions::{Action, HandlerError, async_trait};
+use tracing::{error, warn};
 
 use crate::{
     actions::{AlertAction, FinishedAction, OkAction},
@@ -19,28 +20,33 @@ impl Action for ProcessMail {
 
     async fn run(&self, state: &mut TrackerState, raw: RawMail) -> Result<(), HandlerError> {
         let parsed = parse(raw, &self.config);
-        if parsed
-            .event
-            .message_id
+        let message_id = parsed.event.message_id.clone();
+        if message_id
             .as_ref()
             .is_some_and(|id| state.processed_ids.contains(id))
         {
+            warn!(message_id = ?message_id, "mail event was already recorded");
             return Ok(());
         }
-        if let Some(id) = parsed.event.message_id.clone() {
+        if let Some(id) = message_id.clone() {
             push_bounded(&mut state.processed_ids, id);
         }
 
-        match parsed.signal {
-            Signal::Ok => {
-                OkAction::enqueue(&parsed.event)?;
+        let result: Result<(), HandlerError> = match parsed.signal {
+            Signal::Ok => OkAction::enqueue(&parsed.event)
+                .map(|_| ())
+                .map_err(|error| Box::new(error) as HandlerError),
+            Signal::Finished => FinishedAction::enqueue(&parsed.event)
+                .map(|_| ())
+                .map_err(|error| Box::new(error) as HandlerError),
+            Signal::Alert => {
+                Self::alert(state, parsed.event).map_err(|error| Box::new(error) as HandlerError)
             }
-            Signal::Finished => {
-                FinishedAction::enqueue(&parsed.event)?;
-            }
-            Signal::Alert => Self::alert(state, parsed.event)?,
+        };
+        if let Err(error) = &result {
+            error!(message_id = ?message_id, %error, "failed to handle mail event");
         }
-        Ok(())
+        result
     }
 }
 
