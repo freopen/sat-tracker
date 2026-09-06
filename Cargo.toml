@@ -1,6 +1,6 @@
 [package]
 name = "sat-tracker"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 build = "build.rs"
 
@@ -12,7 +12,7 @@ anyhow = "1"
 axum = "0.8"
 durable-actions = { path = "durable-actions" }
 figment = { version = "0.10", features = ["yaml"] }
-frankenstein = { version = "0.50", features = ["client-reqwest"] }
+frankenstein = { version = "0.52", features = ["client-reqwest"] }
 mail-parser = "0.11"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
