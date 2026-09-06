@@ -389,6 +389,69 @@ async fn telegram_listener_enqueues_owner_commands() {
 }
 
 #[tokio::test]
+async fn telegram_version_reports_build_information() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest/setWebhook"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": true
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 1,
+                "date": 0,
+                "chat": {"id": 1, "type": "private"},
+                "text": "accepted"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let mut configuration = config(server.uri());
+    configuration.telegram_webhook_url = "https://tracker.example/tg".to_owned();
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("tracker.sqlite");
+    let (app, runner) = App::start(configuration, &path).await.unwrap();
+    let app = Arc::new(app);
+
+    let response = router(Arc::clone(&app))
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/tg")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&telegram_update(42, 1, 1_700_000_000, "/version")).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    wait_for_requests(&server, 1).await;
+    let request = send_requests(&server).await.pop().unwrap();
+    let text = request.body_json::<serde_json::Value>().unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let build = crate::build_info();
+    assert!(text.contains(&format!("Version: {}", build.version)));
+    assert!(text.contains(&format!("Build time: {}", build.build_time)));
+    assert!(text.contains(&format!("Git commit: {}", build.git_commit)));
+    assert!(text.contains(&format!("Git dirty: {}", build.git_dirty)));
+
+    app.shutdown();
+    runner.await.unwrap();
+}
+
+#[tokio::test]
 async fn telegram_webhook_registers_and_forwards_updates() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

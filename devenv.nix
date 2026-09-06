@@ -11,7 +11,11 @@
   ];
 
   languages = {
-    rust.enable = true;
+    rust = {
+      enable = true;
+      channel = "stable";
+      version = "latest";
+    };
     nix.enable = true;
   };
 

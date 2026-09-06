@@ -20,7 +20,10 @@ impl App {
         let telegram = Telegram::new(&config).await?;
         let builder = Builder::new(TrackerState::default())
             .register(ProcessMail { config })
-            .register(ProcessTelegram { owner_chat_id })
+            .register(ProcessTelegram {
+                owner_chat_id,
+                telegram: telegram.clone(),
+            })
             .register(OkAction {
                 telegram: telegram.clone(),
             })

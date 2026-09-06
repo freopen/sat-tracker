@@ -5,12 +5,14 @@ use frankenstein::updates::{Update, UpdateContent};
 
 use crate::{
     actions::{FinishedAction, OkAction},
-    mail::Signal,
-    state::{Event, TrackerState, push_bounded},
+    state::{Audience, Event, TrackerState, push_bounded},
+    telegram::Telegram,
+    version::build_info,
 };
 
 pub(crate) struct ProcessTelegram {
     pub(crate) owner_chat_id: i64,
+    pub(crate) telegram: Telegram,
 }
 
 #[async_trait]
@@ -31,7 +33,7 @@ impl Action for ProcessTelegram {
         let Some(text) = message.text.as_deref() else {
             return Ok(());
         };
-        let Some(signal) = classify_command(text) else {
+        let Some(command) = classify_command(text) else {
             return Ok(());
         };
 
@@ -41,33 +43,50 @@ impl Action for ProcessTelegram {
         }
         push_bounded(&mut state.processed_ids, message_id);
 
-        let event = Event {
-            message_id: None,
-            event_at: telegram_time(message.date),
-            body: text.to_owned(),
-            location: None,
-        };
-        match signal {
-            Signal::Ok => {
+        match command {
+            Command::Version => {
+                let build = build_info();
+                let response = build.message();
+                self.telegram.send(Audience::Owner, &response).await?;
+            }
+            Command::Ok => {
+                let event = telegram_event(message.date, text);
                 OkAction::enqueue(&event)?;
             }
-            Signal::Finished => {
+            Command::Finished => {
+                let event = telegram_event(message.date, text);
                 FinishedAction::enqueue(&event)?;
             }
-            Signal::Alert => unreachable!("Telegram commands are classified"),
         }
         Ok(())
     }
 }
 
-fn classify_command(text: &str) -> Option<Signal> {
+enum Command {
+    Ok,
+    Finished,
+    Version,
+}
+
+fn classify_command(text: &str) -> Option<Command> {
     let command = text.split_whitespace().next()?;
     if is_command(command, "/ok") {
-        Some(Signal::Ok)
+        Some(Command::Ok)
     } else if is_command(command, "/finished") {
-        Some(Signal::Finished)
+        Some(Command::Finished)
+    } else if is_command(command, "/version") {
+        Some(Command::Version)
     } else {
         None
+    }
+}
+
+fn telegram_event(timestamp: u64, text: &str) -> Event {
+    Event {
+        message_id: None,
+        event_at: telegram_time(timestamp),
+        body: text.to_owned(),
+        location: None,
     }
 }
 

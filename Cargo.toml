@@ -2,6 +2,7 @@
 name = "sat-tracker"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [workspace]
 members = ["durable-actions"]
@@ -25,3 +26,6 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tempfile = "3"
 tower = "0.5"
 wiremock = "0.6"
+
+[build-dependencies]
+vergen-gitcl = { version = "10", features = ["build"] }

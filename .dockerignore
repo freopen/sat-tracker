@@ -1,4 +1,4 @@
-.git/
+# Keep .git available to vergen in the builder stage.
 .devenv*
 .direnv/
 target/

@@ -4,7 +4,9 @@ WORKDIR /src
 
 COPY . .
 
-RUN cargo test --workspace --locked
+RUN git --version \
+    && git rev-parse --verify HEAD \
+    && cargo test --workspace --locked
 RUN cargo build --release --locked --bin sat-tracker \
     && mkdir /runtime \
     && cp target/release/sat-tracker /runtime/

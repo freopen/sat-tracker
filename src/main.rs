@@ -1,7 +1,7 @@
 use std::{future::IntoFuture, net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use sat_tracker::{App, Config, router};
+use sat_tracker::{App, Config, build_info, router};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
@@ -33,6 +33,15 @@ async fn main() -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| "sat_tracker=info".into()),
         )
         .init();
+
+    let build = build_info();
+    info!(
+        version = build.version,
+        build_time = build.build_time,
+        git_commit = build.git_commit,
+        git_dirty = build.git_dirty,
+        "sat-tracker version"
+    );
 
     let config = Config::load()?;
 
