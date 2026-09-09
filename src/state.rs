@@ -73,10 +73,7 @@ pub(crate) struct AlertParameters {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum AlertSignal {
-    Unrecognized {
-        event: Event,
-        expected_last_ok_at: Option<SystemTime>,
-    },
+    Unrecognized { event: Event },
     Overdue(AlertParameters),
 }
 

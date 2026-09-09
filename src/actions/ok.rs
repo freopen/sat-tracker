@@ -107,7 +107,11 @@ impl OkAction {
         Ok(())
     }
 
-    async fn start_hike(&self, state: &mut TrackerState, event: Event) -> Result<(), HandlerError> {
+    pub(super) async fn start_hike(
+        &self,
+        state: &mut TrackerState,
+        event: Event,
+    ) -> Result<(), HandlerError> {
         let mut hike = ActiveHike {
             started_at: event.event_at,
             started_location: event.location.clone(),
@@ -132,7 +136,7 @@ impl OkAction {
         state.hike = HikeState::Active(hike);
         info!(
             event_at = %format_time(event.event_at),
-            "OK action resulted in starting a new hike"
+            "started a new hike"
         );
         Ok(())
     }

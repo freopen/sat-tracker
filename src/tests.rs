@@ -551,6 +551,52 @@ async fn webhook_acknowledges_durable_enqueue_while_telegram_is_blocked() {
 }
 
 #[tokio::test]
+async fn unrecognized_mail_starts_inactive_hike_and_alerts() {
+    for finished in [false, true] {
+        let server = telegram_server(Duration::ZERO).await;
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("tracker.sqlite");
+        let (app, runner) = App::start(config(server.uri()), &path).await.unwrap();
+        let event_at = SystemTime::now();
+        let previous_requests = if finished {
+            enqueue_at(&app, "start", "ALL OK", event_at).await;
+            wait_for_state(&path, |state| matches!(state.hike, HikeState::Active(_))).await;
+            enqueue_at(&app, "finish", "FINISHED", event_at).await;
+            wait_for_state(&path, |state| matches!(state.hike, HikeState::Finished(_))).await;
+            send_requests(&server).await.len()
+        } else {
+            0
+        };
+        enqueue_at(&app, "unexpected", "raw unrecognized payload", event_at).await;
+        let state = wait_for_state(
+            &path,
+            |state| matches!(&state.hike, HikeState::Active(hike) if hike.safety_alerted),
+        )
+        .await;
+        let HikeState::Active(hike) = state.hike else {
+            panic!("expected active hike");
+        };
+        assert_eq!(hike.started_at, event_at);
+        assert!(hike.owner_started_notified);
+        assert!(hike.owner_alert_action.is_some());
+        assert!(hike.safety_alert_action.is_none());
+        let requests = send_requests(&server).await;
+        assert_eq!(requests.len(), previous_requests + 2);
+        let alert: serde_json::Value =
+            serde_json::from_slice(&requests.last().unwrap().body).unwrap();
+        assert_eq!(alert["chat_id"], 2);
+        assert!(
+            alert["text"]
+                .as_str()
+                .unwrap()
+                .contains("raw unrecognized payload")
+        );
+        app.shutdown();
+        runner.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn ok_after_unrecognized_alert_sends_safety_recovery() {
     let server = telegram_server(Duration::ZERO).await;
     let directory = TempDir::new().unwrap();

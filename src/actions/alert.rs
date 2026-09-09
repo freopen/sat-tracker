@@ -1,6 +1,7 @@
 use durable_actions::{Action, HandlerError, async_trait};
 
 use crate::{
+    actions::OkAction,
     state::{AlertParameters, AlertSignal, Audience, HikeState, TrackerState, format_time},
     telegram::Telegram,
 };
@@ -18,27 +19,26 @@ impl Action for AlertAction {
 
     async fn run(&self, state: &mut TrackerState, signal: AlertSignal) -> Result<(), HandlerError> {
         let alert = match signal {
-            AlertSignal::Unrecognized {
-                event,
-                expected_last_ok_at: Some(expected_last_ok_at),
-            } => AlertParameters {
-                expected_last_ok_at,
-                audience: Audience::Safety,
-                payload: format!(
-                    "SAFETY ALERT: unrecognized InReach message\nEvent time: {}\n\n{}",
-                    format_time(event.event_at),
-                    event.body
-                ),
-            },
-            AlertSignal::Unrecognized {
-                event,
-                expected_last_ok_at: None,
-            } => {
-                warn!(
-                    event_at = %format_time(event.event_at),
-                    "alert action ignored unrecognized event because no hike is active"
-                );
-                return Ok(());
+            AlertSignal::Unrecognized { event } => {
+                let expected_last_ok_at = if let HikeState::Active(hike) = &state.hike {
+                    hike.last_ok_at
+                } else {
+                    OkAction {
+                        telegram: self.telegram.clone(),
+                    }
+                    .start_hike(state, event.clone())
+                    .await?;
+                    event.event_at
+                };
+                AlertParameters {
+                    expected_last_ok_at,
+                    audience: Audience::Safety,
+                    payload: format!(
+                        "SAFETY ALERT: unrecognized InReach message\nEvent time: {}\n\n{}",
+                        format_time(event.event_at),
+                        event.body
+                    ),
+                }
             }
             AlertSignal::Overdue(alert) => alert,
         };

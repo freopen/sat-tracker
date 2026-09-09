@@ -5,7 +5,7 @@ use crate::{
     actions::{AlertAction, FinishedAction, OkAction},
     config::Config,
     mail::{Signal, parse},
-    state::{AlertSignal, Event, HikeState, RawMail, TrackerState, push_bounded},
+    state::{AlertSignal, RawMail, TrackerState, push_bounded},
 };
 
 pub(crate) struct ProcessMail {
@@ -39,27 +39,15 @@ impl Action for ProcessMail {
             Signal::Finished => FinishedAction::enqueue(&parsed.event)
                 .map(|_| ())
                 .map_err(|error| Box::new(error) as HandlerError),
-            Signal::Alert => {
-                Self::alert(state, parsed.event).map_err(|error| Box::new(error) as HandlerError)
-            }
+            Signal::Alert => AlertAction::enqueue(&AlertSignal::Unrecognized {
+                event: parsed.event,
+            })
+            .map(|_| ())
+            .map_err(|error| Box::new(error) as HandlerError),
         };
         if let Err(error) = &result {
             error!(message_id = ?message_id, %error, "failed to handle mail event");
         }
         result
-    }
-}
-
-impl ProcessMail {
-    fn alert(state: &mut TrackerState, event: Event) -> Result<(), durable_actions::Error> {
-        let expected_last_ok_at = match &state.hike {
-            HikeState::Active(hike) => Some(hike.last_ok_at),
-            HikeState::Idle | HikeState::Finished(_) => None,
-        };
-        AlertAction::enqueue(&AlertSignal::Unrecognized {
-            event,
-            expected_last_ok_at,
-        })?;
-        Ok(())
     }
 }
