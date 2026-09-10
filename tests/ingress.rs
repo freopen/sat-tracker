@@ -229,7 +229,7 @@ async fn concurrent_ticks_serialize_and_send_start_once() {
     let (a, b) = tokio::join!(h.app.tick(time(START)), h.app.tick(time(START)));
     a.unwrap();
     b.unwrap();
-    assert_eq!(h.sends().await.len(), 1);
+    assert_eq!(h.sends().await.len(), 2);
 }
 
 #[tokio::test]
@@ -263,7 +263,7 @@ async fn scheduler_reacts_to_ingress_and_registers_webhook() {
     .unwrap();
     h.app.shutdown();
     runner.await.unwrap().unwrap();
-    assert_eq!(h.sends().await.len(), 1);
+    assert_eq!(h.sends().await.len(), 2);
 }
 
 #[tokio::test]

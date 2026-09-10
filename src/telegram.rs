@@ -1,10 +1,14 @@
-use crate::{App, Config, entity::runtime, state::Audience};
+use crate::{
+    App, Config,
+    entity::runtime,
+    state::{Audience, Phase},
+};
 use chrono::{Duration as ChronoDuration, Utc};
 use frankenstein::{
     AsyncTelegramApi,
     client_reqwest::Bot,
     methods::{DeleteWebhookParams, GetUpdatesParams, SendMessageParams, SetWebhookParams},
-    types::AllowedUpdate,
+    types::{AllowedUpdate, KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup},
 };
 use sea_orm::EntityTrait;
 use std::{sync::Arc, time::Duration};
@@ -65,6 +69,43 @@ impl Telegram {
             .await?;
         Ok(())
     }
+
+    pub(crate) async fn send_owner(
+        &self,
+        text: &str,
+        phase: Phase,
+        disable_notification: bool,
+    ) -> anyhow::Result<()> {
+        self.bot
+            .send_message(
+                &SendMessageParams::builder()
+                    .chat_id(self.owner_chat_id)
+                    .text(text)
+                    .disable_notification(disable_notification)
+                    .reply_markup(owner_keyboard(phase))
+                    .build(),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+pub(crate) fn owner_keyboard(phase: Phase) -> ReplyMarkup {
+    let texts: &[&str] = match phase {
+        Phase::Active => &["OK", "FINISHED"],
+        Phase::Idle | Phase::Finished => &["Start hike"],
+    };
+    let keyboard = texts
+        .iter()
+        .map(|text| KeyboardButton::builder().text(*text).build())
+        .collect();
+    ReplyMarkup::ReplyKeyboardMarkup(
+        ReplyKeyboardMarkup::builder()
+            .keyboard(vec![keyboard])
+            .is_persistent(true)
+            .resize_keyboard(true)
+            .build(),
+    )
 }
 
 pub(crate) async fn listen(app: Arc<App>) -> anyhow::Result<()> {
@@ -132,13 +173,21 @@ pub(crate) fn safe_error(error: &anyhow::Error) -> String {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    Start,
+    StartHike,
     Ok,
     Finished,
     Version,
 }
 pub(crate) fn command(text: &str) -> Option<Command> {
+    match text.trim() {
+        "Start hike" => return Some(Command::StartHike),
+        "OK" => return Some(Command::Ok),
+        "FINISHED" => return Some(Command::Finished),
+        _ => {}
+    }
     let first = text.split_whitespace().next()?;
     let name = match first.split_once('@') {
         Some((name, suffix)) if !suffix.is_empty() => name,
@@ -146,8 +195,7 @@ pub(crate) fn command(text: &str) -> Option<Command> {
         None => first,
     };
     match name {
-        "/ok" => Some(Command::Ok),
-        "/finished" => Some(Command::Finished),
+        "/start" => Some(Command::Start),
         "/version" => Some(Command::Version),
         _ => None,
     }
@@ -156,6 +204,36 @@ pub(crate) fn command(text: &str) -> Option<Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owner_commands_use_friendly_labels_and_keep_version() {
+        assert_eq!(command("/start"), Some(Command::Start));
+        assert_eq!(command("/start@tracker"), Some(Command::Start));
+        assert_eq!(command("Start hike"), Some(Command::StartHike));
+        assert_eq!(command(" OK "), Some(Command::Ok));
+        assert_eq!(command("FINISHED"), Some(Command::Finished));
+        assert_eq!(command("/version"), Some(Command::Version));
+        assert_eq!(command("/ok"), None);
+        assert_eq!(command("/finished"), None);
+    }
+
+    #[test]
+    fn owner_keyboard_serializes_phase_specific_one_time_buttons() {
+        let inactive = serde_json::to_value(owner_keyboard(Phase::Finished)).unwrap();
+        assert_eq!(
+            inactive["keyboard"],
+            serde_json::json!([[{"text": "Start hike"}]])
+        );
+        assert_eq!(inactive["is_persistent"], true);
+        assert_eq!(inactive["resize_keyboard"], true);
+
+        let active = serde_json::to_value(owner_keyboard(Phase::Active)).unwrap();
+        assert_eq!(
+            active["keyboard"],
+            serde_json::json!([[{"text": "OK"}, {"text": "FINISHED"}]])
+        );
+    }
+
     #[test]
     fn telegram_retry_after_is_a_floor_and_errors_do_not_leak_payloads() {
         let error: anyhow::Error =

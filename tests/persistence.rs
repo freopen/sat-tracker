@@ -38,7 +38,7 @@ async fn reopen_processes_pending_events_and_overdue_reminders() {
         reopened.tick(time(START + 70 * 60_000)).await.unwrap(),
         None
     );
-    assert_eq!(h.sends().await.len(), 3);
+    assert_eq!(h.sends().await.len(), 4);
     assert_eq!(
         h.runtime().await.last_tick_at,
         Some(time(START + 70 * 60_000))
@@ -48,7 +48,7 @@ async fn reopen_processes_pending_events_and_overdue_reminders() {
         h.runtime().await.last_tick_at,
         Some(time(START + 70 * 60_000))
     );
-    assert_eq!(h.sends().await.len(), 3);
+    assert_eq!(h.sends().await.len(), 4);
 }
 
 #[tokio::test]
@@ -119,13 +119,13 @@ async fn later_event_failure_rolls_back_earlier_inbox_processing() {
     assert_eq!(h.runtime().await.last_tick_at, None);
 
     h.app.tick(time(START + 5000)).await.unwrap();
-    assert_eq!(count.load(Ordering::SeqCst), 5);
+    assert_eq!(count.load(Ordering::SeqCst), 6);
     assert_eq!(h.phase().await, Phase::Finished);
     assert_eq!(h.pending_inbox_count().await, 0);
     let sends = h.sends().await;
     assert_eq!(sends[0], sends[2]);
-    assert_eq!(sends[3]["chat_id"], 10);
-    assert_eq!(sends[4]["chat_id"], 20);
+    assert_eq!(sends[4]["chat_id"], 10);
+    assert_eq!(sends[5]["chat_id"], 20);
 }
 
 #[tokio::test]
@@ -216,7 +216,7 @@ async fn legacy_database_without_migration_history_is_reset() {
         1
     );
     reopened.tick(time(START)).await.unwrap();
-    assert_eq!(h.sends().await.len(), 1);
+    assert_eq!(h.sends().await.len(), 2);
 }
 
 #[tokio::test]

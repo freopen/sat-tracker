@@ -35,10 +35,17 @@ Telegram webhook delivery or long polling; `shutdown` stops these tasks.
 
 An OK starts or refreshes a hike. The owner is reminded after 30 minutes and
 safety after 60 minutes without a newer OK. A later OK sends recovery messages
-to alerted audiences. FINISHED notifies both audiences and starts a five-minute
-cooldown. Unrecognized or ambiguous mail starts an inactive hike and alerts
-safety immediately, suppressing that interval's scheduled safety reminder.
-Only the configured owner chat can use `/ok`, `/finished`, and `/version`.
+to alerted audiences. FINISHED notifies both audiences. Mail OK events received
+within five minutes of FINISHED are ignored to protect against delayed or
+out-of-order mail; Telegram actions are not subject to this mail safeguard.
+Unrecognized or ambiguous mail starts an inactive hike and alerts safety
+immediately, suppressing that interval's scheduled safety reminder.
+
+Only the configured owner chat can use `/start` and `/version`. `/start` shows
+a persistent reply keyboard with `Start hike` when inactive, or `OK` and
+`FINISHED` when active. The keyboard is attached to owner notifications and
+every accepted OK also sends a silent `OK received.` owner message to restore
+it.
 
 ## Configuration and deployment
 
