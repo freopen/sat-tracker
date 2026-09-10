@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use chrono::{DateTime, Utc};
 
 use mail_parser::MessageParser;
 use regex::Regex;
@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     config::Config,
-    state::{Event, RawMail},
+    state::{Event, RawMail, normalize},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,28 +22,28 @@ pub(crate) struct ParsedMail {
 }
 
 pub(crate) fn parse(raw: RawMail, config: &Config) -> ParsedMail {
+    let received_at = normalize(raw.received_at);
     let parsed = MessageParser::default().parse(&raw.bytes);
-    let (message_id, body, header_date) = match parsed {
+    let (body, header_date) = match parsed {
         Some(message) => {
             let body = message
                 .body_text(0)
                 .map(|value| value.into_owned())
                 .unwrap_or_else(|| String::from_utf8_lossy(&raw.bytes).into_owned());
             (
-                message.message_id().map(str::to_owned),
                 body,
                 message
                     .date()
-                    .and_then(|date| system_time(date.to_timestamp())),
+                    .and_then(|date| DateTime::<Utc>::from_timestamp(date.to_timestamp(), 0)),
             )
         }
-        None => (None, String::from_utf8_lossy(&raw.bytes).into_owned(), None),
+        None => (String::from_utf8_lossy(&raw.bytes).into_owned(), None),
     };
     let event_at = match header_date {
-        Some(date) => date.min(raw.received_at),
+        Some(date) => date.min(received_at),
         None => {
             error!("mail has a missing or invalid Date header; using receipt time");
-            raw.received_at
+            received_at
         }
     };
     let ok = config.ok_regex.is_match(&body);
@@ -56,20 +56,11 @@ pub(crate) fn parse(raw: RawMail, config: &Config) -> ParsedMail {
 
     ParsedMail {
         event: Event {
-            message_id,
             event_at,
             location: extract_location(&body),
             body,
         },
         signal,
-    }
-}
-
-fn system_time(timestamp: i64) -> Option<SystemTime> {
-    if timestamp >= 0 {
-        UNIX_EPOCH.checked_add(Duration::from_secs(timestamp as u64))
-    } else {
-        UNIX_EPOCH.checked_sub(Duration::from_secs(timestamp.unsigned_abs()))
     }
 }
 
@@ -91,5 +82,78 @@ pub(crate) fn extract_location(body: &str) -> Option<String> {
         (Some(url), Some(coordinates)) => Some(format!("{coordinates}\n{url}")),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, Utc};
+    fn config(_: String) -> Config {
+        Config {
+            ok_regex: Regex::new("ALL OK").unwrap(),
+            finished_regex: Regex::new("FINISHED").unwrap(),
+            owner_chat_id: 1,
+            safety_chat_id: 2,
+            telegram_api_url: String::new(),
+            telegram_webhook_url: String::new(),
+            telegram_bot_token: String::new(),
+        }
+    }
+    #[test]
+    fn parses_classifies_clamps_and_extracts_quoted_printable_mail() {
+        let received_at = DateTime::<Utc>::from_timestamp(1_000, 0).unwrap();
+        let parsed = parse(
+        RawMail {
+            bytes: b"Date: Thu, 01 Jan 2099 00:00:00 +0000\nMessage-ID: <future>\n\nALL OK Lat 47.1 Lon 9.6 https://inreachlink.com/example.".to_vec(),
+            received_at,
+        },
+        &config("http://localhost".into()),
+    );
+        assert_eq!(parsed.signal, Signal::Ok);
+        assert_eq!(parsed.event.event_at, received_at);
+        assert_eq!(
+            parsed.event.location.as_deref(),
+            Some("Lat 47.1 Lon 9.6\nhttps://inreachlink.com/example")
+        );
+
+        let ambiguous = parse(
+            RawMail {
+                bytes: b"\nALL OK and FINISHED".to_vec(),
+                received_at,
+            },
+            &config("http://localhost".into()),
+        );
+        assert_eq!(ambiguous.signal, Signal::Alert);
+
+        let synthetic = concat!(
+            "From: Garmin InReach <noreply@example.test>\r\n",
+            "To: tracker@example.test\r\n",
+            "Date: Thu, 01 Jan 2026 12:00:00 +0000\r\n",
+            "Message-ID: <synthetic-inreach@example.test>\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: text/plain; charset=\"UTF-8\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "ALL OK\r\n",
+            "Lat 12.3456 Lon -65.4321\r\n",
+            "https://inreachlink.com/synthetic-token?source=3Dtest\r\n",
+        );
+        let parsed = parse(
+            RawMail {
+                bytes: synthetic.as_bytes().to_vec(),
+                received_at: DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap(),
+            },
+            &config("http://localhost".into()),
+        );
+        assert_eq!(parsed.signal, Signal::Ok);
+        assert_eq!(
+            parsed.event.location.as_deref(),
+            Some(
+                "Lat 12.3456 Lon -65.4321\n\
+             https://inreachlink.com/synthetic-token?source=test"
+            )
+        );
+        assert_eq!(extract_location(&parsed.event.body), parsed.event.location);
     }
 }

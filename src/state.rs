@@ -1,108 +1,64 @@
-use std::{
-    collections::VecDeque,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use chrono::{DateTime, Duration, Timelike, Utc};
+use sea_orm::{DeriveActiveEnum, EnumIter};
 
-use durable_actions::ActionId;
-use serde::{Deserialize, Serialize};
+pub(crate) const OWNER_MINUTES: &[i64] = &[30];
+pub(crate) const SAFETY_MINUTES: &[i64] = &[60];
+pub(crate) const FINISHED_COOLDOWN: Duration = Duration::minutes(5);
 
-pub(crate) const OWNER_AFTER: Duration = Duration::from_secs(30 * 60);
-pub(crate) const SAFETY_AFTER: Duration = Duration::from_secs(60 * 60);
-pub(crate) const FINISHED_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-const MAX_IDS: usize = 1024;
+/// The UTC timestamp used by persisted state and business logic.
+pub type DateTimeUtc = DateTime<Utc>;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) struct TrackerState {
-    pub(crate) hike: HikeState,
-    #[serde(default)]
-    pub(crate) processed_ids: VecDeque<String>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) enum HikeState {
-    #[default]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum Phase {
+    #[sea_orm(string_value = "idle")]
     Idle,
-    Active(ActiveHike),
-    Finished(FinishedHike),
+    #[sea_orm(string_value = "active")]
+    Active,
+    #[sea_orm(string_value = "finished")]
+    Finished,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct ActiveHike {
-    pub(crate) started_at: SystemTime,
-    pub(crate) started_location: Option<String>,
-    pub(crate) last_event_at: SystemTime,
-    pub(crate) last_ok_at: SystemTime,
-    pub(crate) last_body: String,
-    pub(crate) location: Option<String>,
-    pub(crate) owner_started_notified: bool,
-    pub(crate) owner_alerted: bool,
-    pub(crate) safety_alerted: bool,
-    pub(crate) owner_alert_action: Option<ActionId>,
-    pub(crate) safety_alert_action: Option<ActionId>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum IngressSource {
+    #[sea_orm(string_value = "mail")]
+    Mail,
+    #[sea_orm(string_value = "telegram")]
+    Telegram,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct FinishedHike {
-    pub(crate) event_at: SystemTime,
-    pub(crate) body: String,
-    pub(crate) location: Option<String>,
-    pub(crate) owner_notified: bool,
-    pub(crate) safety_notified: bool,
+impl IngressSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Mail => "mail",
+            Self::Telegram => "telegram",
+        }
+    }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RawMail {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) received_at: SystemTime,
+    pub bytes: Vec<u8>,
+    pub received_at: DateTimeUtc,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Event {
-    pub(crate) message_id: Option<String>,
-    pub(crate) event_at: SystemTime,
-    pub(crate) body: String,
-    pub(crate) location: Option<String>,
+    pub event_at: DateTimeUtc,
+    pub body: String,
+    pub location: Option<String>,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct AlertParameters {
-    pub(crate) expected_last_ok_at: SystemTime,
-    pub(crate) audience: Audience,
-    pub(crate) payload: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) enum AlertSignal {
-    Unrecognized { event: Event },
-    Overdue(AlertParameters),
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum Audience {
     Owner,
     Safety,
 }
 
-pub(crate) fn push_bounded(values: &mut VecDeque<String>, value: String) {
-    values.push_back(value);
-    while values.len() > MAX_IDS {
-        values.pop_front();
-    }
+pub(crate) fn format_time(time: DateTimeUtc) -> String {
+    time.to_rfc3339()
 }
 
-pub(crate) fn location_suffix(location: Option<&str>) -> String {
-    location
-        .map(|value| format!("\n{value}"))
-        .unwrap_or_default()
-}
-
-pub(crate) fn format_time(time: SystemTime) -> String {
-    mail_parser::DateTime::from_timestamp(unix_timestamp(time)).to_rfc3339()
-}
-
-fn unix_timestamp(time: SystemTime) -> i64 {
-    match time.duration_since(UNIX_EPOCH) {
-        Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
-        Err(error) => -i64::try_from(error.duration().as_secs()).unwrap_or(i64::MAX),
-    }
+/// Keep the persisted clock precision stable while using chrono's rich type
+/// for all comparisons and arithmetic.
+pub(crate) fn normalize(time: DateTimeUtc) -> DateTimeUtc {
+    time.with_nanosecond(time.timestamp_subsec_millis() * 1_000_000)
+        .expect("millisecond precision is valid for every chrono timestamp")
 }

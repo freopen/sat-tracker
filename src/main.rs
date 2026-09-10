@@ -45,8 +45,8 @@ async fn main() -> Result<()> {
 
     let config = Config::load()?;
 
-    let (app, runner) = App::start(config, "sat-tracker.sqlite").await?;
-    let app = Arc::new(app);
+    let app = Arc::new(App::open(config, "sat-tracker.sqlite").await?);
+    let runner = app.clone().run();
 
     let router = router(Arc::clone(&app));
     let address: SocketAddr = "0.0.0.0:8080".parse().unwrap();
@@ -65,8 +65,8 @@ async fn main() -> Result<()> {
             runner_result?;
         }
         result = &mut runner => match result {
-            Ok(()) => anyhow::bail!("durable action runner stopped unexpectedly"),
-            Err(error) => return Err(error.into()),
+            Ok(()) => anyhow::bail!("tick scheduler stopped unexpectedly"),
+            Err(error) => return Err(error),
         },
     }
     Ok(())
