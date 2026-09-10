@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use frankenstein::updates::Update;
 use sat_tracker::{
     App, Config, Phase,
-    entity::{inbox, runtime, tracker},
+    entity::{inbox, runtime, settings, tracker},
 };
 use sea_orm::{
     ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
@@ -93,6 +93,13 @@ impl Harness {
     }
     pub async fn runtime(&self) -> runtime::Model {
         runtime::Entity::find_by_id(1)
+            .one(&self.db)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+    pub async fn settings(&self) -> settings::Model {
+        settings::Entity::find_by_id(1)
             .one(&self.db)
             .await
             .unwrap()

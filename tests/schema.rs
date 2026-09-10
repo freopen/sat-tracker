@@ -1,8 +1,12 @@
 mod common;
 use common::*;
-use sat_tracker::entity::inbox;
+use sat_tracker::{
+    ReminderMinutes,
+    entity::{inbox, settings},
+};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait, QueryFilter, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, IntoActiveModel,
+    PaginatorTrait, QueryFilter, Set, Statement,
 };
 
 #[tokio::test]
@@ -50,6 +54,7 @@ async fn tracker_and_runtime_constraints_reject_invalid_state() {
         "INSERT INTO tracker (id, phase) VALUES (2, 'idle')",
         "INSERT INTO runtime (id) VALUES (2)",
         "UPDATE runtime SET telegram_poll_offset = -1",
+        "UPDATE runtime SET settings_position = 'invalid'",
         "UPDATE tracker SET phase = 'unknown'",
         "UPDATE tracker SET phase = 'active'",
         "UPDATE tracker SET phase = 'finished'",
@@ -86,6 +91,38 @@ async fn tracker_and_runtime_constraints_reject_invalid_state() {
     h.db.execute_unprepared("UPDATE runtime SET next_tick_at = '1970-01-01T00:00:00+00:00'")
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn settings_round_trip_as_json_and_keep_only_confirmed_values() {
+    let h = Harness::new().await;
+    let initial = h.settings().await;
+    assert_eq!(initial.owner_reminder_minutes.0, vec![30]);
+    assert_eq!(initial.safety_reminder_minutes.0, vec![60]);
+
+    let mut model = initial.into_active_model();
+    model.owner_reminder_minutes = Set(ReminderMinutes(vec![30, 45, 60]));
+    model.update(&h.db).await.unwrap();
+
+    let loaded = settings::Entity::find_by_id(1)
+        .one(&h.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.owner_reminder_minutes.0, vec![30, 45, 60]);
+    let row =
+        h.db.query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT owner_reminder_minutes FROM settings WHERE id = 1",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let raw: String = row.try_get_by_index(0).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Vec<i64>>(&raw).unwrap(),
+        vec![30, 45, 60]
+    );
 }
 
 #[tokio::test]

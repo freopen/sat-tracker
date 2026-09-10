@@ -76,13 +76,23 @@ impl Telegram {
         phase: Phase,
         disable_notification: bool,
     ) -> anyhow::Result<()> {
+        self.send_owner_with_keyboard(text, owner_keyboard(phase), disable_notification)
+            .await
+    }
+
+    pub(crate) async fn send_owner_with_keyboard(
+        &self,
+        text: &str,
+        keyboard: ReplyMarkup,
+        disable_notification: bool,
+    ) -> anyhow::Result<()> {
         self.bot
             .send_message(
                 &SendMessageParams::builder()
                     .chat_id(self.owner_chat_id)
                     .text(text)
                     .disable_notification(disable_notification)
-                    .reply_markup(owner_keyboard(phase))
+                    .reply_markup(keyboard)
                     .build(),
             )
             .await?;
@@ -90,18 +100,43 @@ impl Telegram {
     }
 }
 
+pub(crate) const SETTINGS_BUTTON: &str = "Settings";
+pub(crate) const OWNER_REMINDER_TIMES_BUTTON: &str = "Owner reminder times";
+pub(crate) const SAFETY_REMINDER_TIMES_BUTTON: &str = "Safety reminder times";
+pub(crate) const BACK_BUTTON: &str = "Back";
+
 pub(crate) fn owner_keyboard(phase: Phase) -> ReplyMarkup {
-    let texts: &[&str] = match phase {
-        Phase::Active => &["OK", "FINISHED"],
-        Phase::Idle | Phase::Finished => &["Start hike"],
+    let rows = match phase {
+        Phase::Active => vec![vec!["OK", "FINISHED"]],
+        Phase::Idle | Phase::Finished => vec![vec!["Start hike", SETTINGS_BUTTON]],
     };
-    let keyboard = texts
-        .iter()
-        .map(|text| KeyboardButton::builder().text(*text).build())
+    reply_keyboard(rows)
+}
+
+pub(crate) fn settings_keyboard() -> ReplyMarkup {
+    reply_keyboard(vec![
+        vec![OWNER_REMINDER_TIMES_BUTTON],
+        vec![SAFETY_REMINDER_TIMES_BUTTON],
+        vec![BACK_BUTTON],
+    ])
+}
+
+pub(crate) fn setting_prompt_keyboard() -> ReplyMarkup {
+    reply_keyboard(vec![vec![BACK_BUTTON]])
+}
+
+fn reply_keyboard(rows: Vec<Vec<&'static str>>) -> ReplyMarkup {
+    let keyboard = rows
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|text| KeyboardButton::builder().text(text).build())
+                .collect()
+        })
         .collect();
     ReplyMarkup::ReplyKeyboardMarkup(
         ReplyKeyboardMarkup::builder()
-            .keyboard(vec![keyboard])
+            .keyboard(keyboard)
             .is_persistent(true)
             .resize_keyboard(true)
             .build(),
@@ -180,12 +215,20 @@ pub(crate) enum Command {
     Ok,
     Finished,
     Version,
+    Settings,
+    OwnerReminderTimes,
+    SafetyReminderTimes,
+    Back,
 }
 pub(crate) fn command(text: &str) -> Option<Command> {
     match text.trim() {
         "Start hike" => return Some(Command::StartHike),
         "OK" => return Some(Command::Ok),
         "FINISHED" => return Some(Command::Finished),
+        SETTINGS_BUTTON => return Some(Command::Settings),
+        OWNER_REMINDER_TIMES_BUTTON => return Some(Command::OwnerReminderTimes),
+        SAFETY_REMINDER_TIMES_BUTTON => return Some(Command::SafetyReminderTimes),
+        BACK_BUTTON => return Some(Command::Back),
         _ => {}
     }
     let first = text.split_whitespace().next()?;
@@ -212,6 +255,16 @@ mod tests {
         assert_eq!(command("Start hike"), Some(Command::StartHike));
         assert_eq!(command(" OK "), Some(Command::Ok));
         assert_eq!(command("FINISHED"), Some(Command::Finished));
+        assert_eq!(command(SETTINGS_BUTTON), Some(Command::Settings));
+        assert_eq!(
+            command(OWNER_REMINDER_TIMES_BUTTON),
+            Some(Command::OwnerReminderTimes)
+        );
+        assert_eq!(
+            command(SAFETY_REMINDER_TIMES_BUTTON),
+            Some(Command::SafetyReminderTimes)
+        );
+        assert_eq!(command(BACK_BUTTON), Some(Command::Back));
         assert_eq!(command("/version"), Some(Command::Version));
         assert_eq!(command("/ok"), None);
         assert_eq!(command("/finished"), None);
@@ -222,7 +275,7 @@ mod tests {
         let inactive = serde_json::to_value(owner_keyboard(Phase::Finished)).unwrap();
         assert_eq!(
             inactive["keyboard"],
-            serde_json::json!([[{"text": "Start hike"}]])
+            serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
         );
         assert_eq!(inactive["is_persistent"], true);
         assert_eq!(inactive["resize_keyboard"], true);
@@ -232,6 +285,19 @@ mod tests {
             active["keyboard"],
             serde_json::json!([[{"text": "OK"}, {"text": "FINISHED"}]])
         );
+
+        let settings = serde_json::to_value(settings_keyboard()).unwrap();
+        assert_eq!(
+            settings["keyboard"],
+            serde_json::json!([
+                [{"text": "Owner reminder times"}],
+                [{"text": "Safety reminder times"}],
+                [{"text": "Back"}]
+            ])
+        );
+
+        let prompt = serde_json::to_value(setting_prompt_keyboard()).unwrap();
+        assert_eq!(prompt["keyboard"], serde_json::json!([[{"text": "Back"}]]));
     }
 
     #[test]

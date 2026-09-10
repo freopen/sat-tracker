@@ -4,9 +4,10 @@ A small InReach hike monitor with Telegram owner and safety notifications.
 
 ## Processing
 
-SQLite is the authoritative store for the inbox, current hike, Telegram polling
-offset, and tick deadlines. SeaORM migrations apply versioned schema changes at
-startup and record them in `seaql_migrations`. There is no action engine or outbox.
+SQLite is the authoritative store for the inbox, current hike, confirmed bot
+settings, Telegram polling offset, settings-menu position, and tick deadlines.
+SeaORM migrations apply versioned schema changes at startup and record them in
+`seaql_migrations`. There is no action engine or outbox.
 
 Ingress commits an inbox entry and an ASAP tick deadline before acknowledging
 receipt. Telegram updates are deduplicated by update ID, mail by Message-ID.
@@ -33,19 +34,23 @@ Tests can use `App::open`, ingress methods, and explicit calls to `tick` without
 starting background tasks. `Arc<App>::run` starts scheduling and configures
 Telegram webhook delivery or long polling; `shutdown` stops these tasks.
 
-An OK starts or refreshes a hike. The owner is reminded after 30 minutes and
-safety after 60 minutes without a newer OK. A later OK sends recovery messages
-to alerted audiences. FINISHED notifies both audiences. Mail OK events received
-within five minutes of FINISHED are ignored to protect against delayed or
-out-of-order mail; Telegram actions are not subject to this mail safeguard.
+An OK starts or refreshes a hike. By default, the owner is reminded after 30
+minutes and safety after 60 minutes without a newer OK. Reminder schedules can
+be edited by the owner from Telegram while no hike is active. A later OK sends
+recovery messages to alerted audiences. FINISHED notifies both audiences. Mail
+OK events received within five minutes of FINISHED are ignored to protect
+against delayed or out-of-order mail; Telegram actions are not subject to this
+mail safeguard.
 Unrecognized or ambiguous mail starts an inactive hike and alerts safety
 immediately, suppressing that interval's scheduled safety reminder.
 
-Only the configured owner chat can use `/start` and `/version`. `/start` shows
-a persistent reply keyboard with `Start hike` when inactive, or `OK` and
-`FINISHED` when active. The keyboard is attached to owner notifications and
-every accepted OK also sends a silent `OK received.` owner message to restore
-it.
+Only the configured owner chat can use `/start`, `/version`, and the reply
+keyboard. `/start` shows a persistent reply keyboard with `Start hike` and
+`Settings` when inactive, or `OK` and `FINISHED` when active. Settings contains
+separate owner and safety reminder-time entries. Each value is entered as a
+non-empty, strictly increasing comma-separated list of positive minutes, such
+as `30, 45, 60`. The keyboard is attached to owner notifications and every
+accepted OK also sends a silent `OK received.` owner message to restore it.
 
 ## Configuration and deployment
 
@@ -81,7 +86,8 @@ Schema changes belong in new files under `src/migration/`, registered in
 `Migrator::migrations()`. Each migration defines its own SQL independently of the
 runtime entities, including `up` and `down`. Update entity mappings alongside new
 migrations; do not edit migrations that have already been applied. The initial
-migration also creates the tracker and runtime singleton rows.
+migration creates the tracker and runtime singleton rows; the next migration
+adds confirmed settings and the runtime settings-menu position.
 
 The schema enforces singleton IDs, known sources and hike phases, inbox payload
 lifecycle, nonnegative counters, boolean values, and consistent hike timestamps.
@@ -109,11 +115,12 @@ Normal upgrades add new migrations and update the entity mappings together.
 - `db.rs`, `migration/`, `entity/`: SQLite setup, versioned migrations, and entity mappings.
 
 Reminder thresholds are ordered lists with per-audience progress counters,
-initially `[30]` and `[60]`. Future bot settings can live in a typed entity and be
-updated during tick; safety rendering is isolated for MiniJinja. Garmin polling
-can add persisted GPS data and a next-poll deadline to the same procedure, with
+initially `[30]` and `[60]`. Confirmed schedules are stored as JSON-backed
+`ReminderMinutes` values in the singleton settings entity and are updated during
+the transactional tick. The current owner settings-menu position is stored in
+the runtime entity, so a prompt can survive a restart. Garmin polling can add
+persisted GPS data and a next-poll deadline to the same procedure, with
 expected polling failures rescheduled without aborting safety processing.
-These future features are not implemented in this release.
 
 ## Verification
 

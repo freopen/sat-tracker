@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use sat_tracker::{Phase, entity::inbox};
+use sat_tracker::{Phase, SettingsPosition, entity::inbox};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait, QueryFilter, Statement,
 };
@@ -49,6 +49,40 @@ async fn reopen_processes_pending_events_and_overdue_reminders() {
         Some(time(START + 70 * 60_000))
     );
     assert_eq!(h.sends().await.len(), 4);
+}
+
+#[tokio::test]
+async fn settings_prompt_position_survives_restart() {
+    let h = Harness::new().await;
+    h.app
+        .accept_telegram(update(1, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.app
+        .accept_telegram(
+            update(2, 10, START + 1000, "Owner reminder times"),
+            time(START + 1000),
+        )
+        .await
+        .unwrap();
+    h.tick(START + 1000).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+
+    let reopened = reopen(&h).await;
+    reopened
+        .accept_telegram(update(3, 10, START + 2000, "30, 45"), time(START + 2000))
+        .await
+        .unwrap();
+    reopened.tick(time(START + 2000)).await.unwrap();
+
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![30, 45]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
 }
 
 #[tokio::test]
@@ -184,7 +218,7 @@ async fn migrations_preserve_state_and_deduplication_key() {
         .unwrap();
     assert_eq!(h.inbox_count().await, 1);
     let manager = SchemaManager::new(&h.db);
-    for table in ["runtime", "tracker", "inbox"] {
+    for table in ["runtime", "tracker", "inbox", "settings"] {
         assert!(manager.has_table(table).await.unwrap());
     }
     assert_eq!(h.phase().await, Phase::Active);
@@ -213,7 +247,7 @@ async fn legacy_database_without_migration_history_is_reset() {
             .await
             .unwrap()
             .len(),
-        1
+        2
     );
     reopened.tick(time(START)).await.unwrap();
     assert_eq!(h.sends().await.len(), 2);
@@ -236,14 +270,14 @@ async fn unknown_migration_fails_without_resetting_data() {
     );
     assert_eq!(h.phase().await, Phase::Active);
     assert_eq!(h.inbox_count().await, 1);
-    assert_eq!(number(&h, "SELECT count(*) FROM seaql_migrations").await, 2);
+    assert_eq!(number(&h, "SELECT count(*) FROM seaql_migrations").await, 3);
 }
 
 #[tokio::test]
 async fn empty_migration_history_applies_initial_migration() {
     let h = Harness::new().await;
     h.db.execute_unprepared(
-        "DROP TABLE inbox; DROP TABLE tracker; DROP TABLE runtime; DELETE FROM seaql_migrations;",
+        "DROP TABLE inbox; DROP TABLE tracker; DROP TABLE runtime; DROP TABLE settings; DELETE FROM seaql_migrations;",
     )
     .await
     .unwrap();
@@ -254,6 +288,6 @@ async fn empty_migration_history_applies_initial_migration() {
             .await
             .unwrap()
             .len(),
-        1
+        2
     );
 }

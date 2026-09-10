@@ -1,7 +1,9 @@
 mod common;
 use common::*;
-use sat_tracker::{Phase, entity::inbox};
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+use sat_tracker::{Phase, ReminderMinutes, SettingsPosition, entity::inbox};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, Set,
+};
 
 #[tokio::test]
 async fn lifecycle_deadlines_and_recovery() {
@@ -159,7 +161,7 @@ async fn owner_reply_keyboard_tracks_state_and_silences_ok_acknowledgements() {
     assert_eq!(sends[0]["text"], "Choose an action.");
     assert_eq!(
         sends[0]["reply_markup"]["keyboard"],
-        serde_json::json!([[{"text": "Start hike"}]])
+        serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
     );
     assert!(sends[0]["reply_markup"].get("one_time_keyboard").is_none());
     assert_eq!(sends[0]["reply_markup"]["resize_keyboard"], true);
@@ -200,10 +202,209 @@ async fn owner_reply_keyboard_tracks_state_and_silences_ok_acknowledgements() {
     assert_eq!(sends[4]["chat_id"], 10);
     assert_eq!(
         sends[4]["reply_markup"]["keyboard"],
-        serde_json::json!([[{"text": "Start hike"}]])
+        serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
     );
     assert_eq!(sends[5]["chat_id"], 20);
     assert!(sends[5].get("reply_markup").is_none());
+}
+
+#[tokio::test]
+async fn owner_can_edit_both_reminder_schedules_while_inactive() {
+    let h = Harness::new().await;
+
+    h.app
+        .accept_telegram(update(10, 10, START, "/start"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.runtime().await.settings_position, SettingsPosition::Main);
+    assert_eq!(
+        h.sends().await[0]["reply_markup"]["keyboard"],
+        serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
+    );
+
+    h.app
+        .accept_telegram(update(11, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+    assert_eq!(h.sends().await[1]["text"], "Choose a setting.");
+
+    h.app
+        .accept_telegram(update(12, 10, START, "Owner reminder times"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+    assert!(h.sends().await[2]["text"].as_str().unwrap().contains("30"));
+    assert_eq!(
+        h.sends().await[2]["reply_markup"]["keyboard"],
+        serde_json::json!([[{"text": "Back"}]])
+    );
+
+    h.app
+        .accept_telegram(update(13, 10, START, "30, 45, 60"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.settings().await.owner_reminder_minutes.0,
+        vec![30, 45, 60]
+    );
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+    assert!(
+        h.sends().await[3]["text"]
+            .as_str()
+            .unwrap()
+            .contains("30, 45, 60")
+    );
+
+    h.app
+        .accept_telegram(update(14, 10, START, "Safety reminder times"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::SafetyReminderTimes
+    );
+    assert!(h.sends().await[4]["text"].as_str().unwrap().contains("60"));
+
+    h.app
+        .accept_telegram(update(15, 10, START, "45, 90"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.settings().await.safety_reminder_minutes.0, vec![45, 90]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+
+    h.app
+        .accept_telegram(update(16, 10, START, "Back"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.runtime().await.settings_position, SettingsPosition::Main);
+    assert_eq!(
+        h.sends().await[6]["reply_markup"]["keyboard"],
+        serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
+    );
+}
+
+#[tokio::test]
+async fn invalid_reminder_input_keeps_confirmed_value_and_prompt() {
+    let h = Harness::new().await;
+    for (id, text) in [
+        (20, "Settings"),
+        (21, "Owner reminder times"),
+        (22, "45, 30"),
+    ] {
+        h.app
+            .accept_telegram(update(id, 10, START, text), time(START))
+            .await
+            .unwrap();
+    }
+    h.tick(START).await;
+
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![30]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+    let sends = h.sends().await;
+    assert!(sends[2]["text"].as_str().unwrap().starts_with("Invalid"));
+    assert_eq!(
+        sends[2]["reply_markup"]["keyboard"],
+        serde_json::json!([[{"text": "Back"}]])
+    );
+}
+
+#[tokio::test]
+async fn settings_are_immutable_after_hike_start() {
+    let h = Harness::new().await;
+    for (id, text) in [
+        (30, "Settings"),
+        (31, "Owner reminder times"),
+        (32, "5, 10"),
+        (33, "Back"),
+        (34, "Start hike"),
+    ] {
+        h.app
+            .accept_telegram(update(id, 10, START, text), time(START))
+            .await
+            .unwrap();
+    }
+    h.tick(START).await;
+
+    assert_eq!(h.phase().await, Phase::Active);
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![5, 10]);
+    assert_eq!(h.runtime().await.settings_position, SettingsPosition::Main);
+
+    h.app
+        .accept_telegram(update(35, 10, START, "1, 2"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![5, 10]);
+    assert_eq!(h.runtime().await.settings_position, SettingsPosition::Main);
+}
+
+#[tokio::test]
+async fn persisted_reminder_schedules_drive_deadlines() {
+    let h = Harness::new().await;
+    let mut settings = h.settings().await.into_active_model();
+    settings.owner_reminder_minutes = Set(ReminderMinutes(vec![5, 10]));
+    settings.safety_reminder_minutes = Set(ReminderMinutes(vec![15]));
+    settings.update(&h.db).await.unwrap();
+
+    h.mail("start", "OK", START).await;
+    assert_eq!(h.tick(START).await, Some(time(START + 5 * 60_000)));
+    assert_eq!(
+        h.tick(START + 5 * 60_000).await,
+        Some(time(START + 10 * 60_000))
+    );
+    assert_eq!(
+        h.tick(START + 10 * 60_000).await,
+        Some(time(START + 15 * 60_000))
+    );
+    assert_eq!(h.tick(START + 15 * 60_000).await, None);
+
+    let tracker = h.tracker().await;
+    assert_eq!(tracker.owner_reminders_sent, 2);
+    assert_eq!(tracker.safety_reminders_sent, 1);
+    let sends = h.sends().await;
+    assert_eq!(sends.len(), 5);
+    assert_eq!(sends[2]["chat_id"], 10);
+    assert_eq!(sends[3]["chat_id"], 10);
+    assert_eq!(sends[4]["chat_id"], 20);
+}
+
+#[tokio::test]
+async fn unrecognized_alert_suppresses_all_configured_safety_reminders() {
+    let h = Harness::new().await;
+    let mut settings = h.settings().await.into_active_model();
+    settings.owner_reminder_minutes = Set(ReminderMinutes(vec![30]));
+    settings.safety_reminder_minutes = Set(ReminderMinutes(vec![5, 10, 15]));
+    settings.update(&h.db).await.unwrap();
+
+    h.mail("unknown", "HELP", START).await;
+    h.tick(START).await;
+    assert_eq!(h.tracker().await.safety_reminders_sent, 3);
+    h.tick(START + 15 * 60_000).await;
+    assert_eq!(h.sends().await.len(), 2);
+    assert_eq!(h.tracker().await.safety_reminders_sent, 3);
 }
 
 #[tokio::test]

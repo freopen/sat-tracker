@@ -1,13 +1,13 @@
 use crate::{
     App, db,
-    entity::{inbox, runtime, tracker},
+    entity::{inbox, runtime, settings, tracker},
     mail::{self, Signal},
     messages,
     state::{
-        Audience, DateTimeUtc, Event, FINISHED_COOLDOWN, IngressSource, OWNER_MINUTES, Phase,
-        RawMail, SAFETY_MINUTES, normalize,
+        Audience, DateTimeUtc, Event, FINISHED_COOLDOWN, IngressSource, Phase, RawMail,
+        ReminderMinutes, SettingsPosition, normalize,
     },
-    telegram::{Command, command},
+    telegram::{Command, command, setting_prompt_keyboard, settings_keyboard},
     version::build_info,
 };
 use anyhow::Context;
@@ -38,18 +38,27 @@ impl App {
             .one(tx)
             .await?
             .context("missing runtime")?;
+        let mut settings = settings::Entity::find_by_id(1)
+            .one(tx)
+            .await?
+            .context("missing settings")?;
         let now = effective_now(requested_now, runtime.last_tick_at);
         let mut hike = tracker::Entity::find_by_id(1)
             .one(tx)
             .await?
             .context("missing tracker")?;
 
-        self.process_pending_inbox(tx, &mut hike, now).await?;
-        let next = self.reminders(&mut hike, now).await?;
+        if hike.phase == Phase::Active {
+            runtime.settings_position = SettingsPosition::Main;
+        }
+        self.process_pending_inbox(tx, &mut hike, &mut runtime, &mut settings, now)
+            .await?;
+        let next = self.reminders(&mut hike, &settings, now).await?;
         hike.into_active_model().reset_all().update(tx).await?;
         runtime.last_tick_at = Some(now);
         runtime.next_tick_at = next;
         runtime.into_active_model().reset_all().update(tx).await?;
+        settings.into_active_model().reset_all().update(tx).await?;
         Ok(next)
     }
 
@@ -57,6 +66,8 @@ impl App {
         &self,
         tx: &DatabaseTransaction,
         hike: &mut tracker::Model,
+        runtime: &mut runtime::Model,
+        settings: &mut settings::Model,
         now: DateTimeUtc,
     ) -> anyhow::Result<()> {
         let rows = inbox::Entity::find()
@@ -65,7 +76,8 @@ impl App {
             .all(tx)
             .await?;
         for row in rows {
-            self.process_inbox_row(tx, row, hike, now).await?;
+            self.process_inbox_row(tx, row, hike, runtime, settings, now)
+                .await?;
         }
         Ok(())
     }
@@ -75,6 +87,8 @@ impl App {
         tx: &DatabaseTransaction,
         row: inbox::Model,
         hike: &mut tracker::Model,
+        runtime: &mut runtime::Model,
+        settings: &mut settings::Model,
         now: DateTimeUtc,
     ) -> anyhow::Result<()> {
         let payload = row
@@ -95,12 +109,17 @@ impl App {
                 {
                     tracing::info!("mail OK ignored during finished-hike cooldown");
                 } else {
-                    self.apply_event(hike, parsed.signal, parsed.event).await?;
+                    self.apply_event(hike, parsed.signal, parsed.event, settings)
+                        .await?;
                 }
             }
             IngressSource::Telegram => {
-                self.process_telegram(payload, now, hike).await?;
+                self.process_telegram(payload, now, hike, runtime, settings)
+                    .await?;
             }
+        }
+        if hike.phase == Phase::Active {
+            runtime.settings_position = SettingsPosition::Main;
         }
         let mut row = row.into_active_model();
         row.payload = Set(None);
@@ -114,6 +133,8 @@ impl App {
         payload: &[u8],
         now: DateTimeUtc,
         hike: &mut tracker::Model,
+        runtime: &mut runtime::Model,
+        settings: &mut settings::Model,
     ) -> anyhow::Result<()> {
         let update: Update = serde_json::from_slice(payload)?;
         let UpdateContent::Message(message) = update.content else {
@@ -128,26 +149,103 @@ impl App {
             tracing::info!("ignored Telegram message without text");
             return Ok(());
         };
-        let Some(command) = command(text) else {
-            tracing::info!("ignored unknown Telegram command");
-            return Ok(());
-        };
+        let command = command(text);
         match command {
-            Command::Start => {
+            Some(Command::Start) => {
+                runtime.settings_position = SettingsPosition::Main;
                 self.telegram
                     .send_owner("Choose an action.", hike.phase, false)
                     .await?;
                 tracing::info!("Telegram start command handled");
                 return Ok(());
             }
-            Command::Version => {
+            Some(Command::Version) => {
+                runtime.settings_position = SettingsPosition::Main;
                 self.telegram
                     .send_owner(&build_info().message(), hike.phase, false)
                     .await?;
                 tracing::info!("Telegram version command handled");
                 return Ok(());
             }
-            Command::StartHike | Command::Ok | Command::Finished => {}
+            Some(Command::Settings) => {
+                if is_inactive(hike.phase) {
+                    runtime.settings_position = SettingsPosition::Settings;
+                    self.send_settings_menu().await?;
+                } else {
+                    runtime.settings_position = SettingsPosition::Main;
+                    self.telegram
+                        .send_owner(
+                            "Settings are unavailable while a hike is active.",
+                            hike.phase,
+                            false,
+                        )
+                        .await?;
+                }
+                return Ok(());
+            }
+            Some(Command::OwnerReminderTimes) | Some(Command::SafetyReminderTimes) => {
+                let position = match command {
+                    Some(Command::OwnerReminderTimes) => SettingsPosition::OwnerReminderTimes,
+                    Some(Command::SafetyReminderTimes) => SettingsPosition::SafetyReminderTimes,
+                    _ => unreachable!(),
+                };
+                if is_inactive(hike.phase) {
+                    runtime.settings_position = position;
+                    self.send_setting_prompt(position, settings).await?;
+                } else {
+                    runtime.settings_position = SettingsPosition::Main;
+                    self.telegram
+                        .send_owner(
+                            "Settings are unavailable while a hike is active.",
+                            hike.phase,
+                            false,
+                        )
+                        .await?;
+                }
+                return Ok(());
+            }
+            Some(Command::Back) => {
+                if !is_inactive(hike.phase) {
+                    runtime.settings_position = SettingsPosition::Main;
+                    self.telegram
+                        .send_owner("Choose an action.", hike.phase, false)
+                        .await?;
+                    return Ok(());
+                }
+                runtime.settings_position = match runtime.settings_position {
+                    SettingsPosition::OwnerReminderTimes
+                    | SettingsPosition::SafetyReminderTimes => SettingsPosition::Settings,
+                    SettingsPosition::Settings | SettingsPosition::Main => SettingsPosition::Main,
+                };
+                if runtime.settings_position == SettingsPosition::Settings {
+                    self.send_settings_menu().await?;
+                } else {
+                    self.telegram
+                        .send_owner("Choose an action.", hike.phase, false)
+                        .await?;
+                }
+                return Ok(());
+            }
+            Some(Command::StartHike) | Some(Command::Ok) | Some(Command::Finished) => {
+                runtime.settings_position = SettingsPosition::Main;
+            }
+            None => {
+                if !is_inactive(hike.phase) {
+                    runtime.settings_position = SettingsPosition::Main;
+                    tracing::info!("ignored Telegram message while hike is active");
+                    return Ok(());
+                }
+                match runtime.settings_position {
+                    SettingsPosition::OwnerReminderTimes
+                    | SettingsPosition::SafetyReminderTimes => {
+                        self.process_setting_input(text, runtime, settings).await?;
+                    }
+                    SettingsPosition::Main | SettingsPosition::Settings => {
+                        tracing::info!("ignored unknown Telegram command");
+                    }
+                }
+                return Ok(());
+            }
         }
         let event = Event {
             event_at: telegram_event_time(message.date, now),
@@ -155,11 +253,77 @@ impl App {
             location: None,
         };
         let signal = match command {
-            Command::StartHike | Command::Ok => Signal::Ok,
-            Command::Finished => Signal::Finished,
-            Command::Start | Command::Version => unreachable!("handled above"),
+            Some(Command::StartHike) | Some(Command::Ok) => Signal::Ok,
+            Some(Command::Finished) => Signal::Finished,
+            _ => unreachable!("handled above"),
         };
-        self.apply_event(hike, signal, event).await
+        self.apply_event(hike, signal, event, settings).await
+    }
+
+    async fn send_settings_menu(&self) -> anyhow::Result<()> {
+        self.telegram
+            .send_owner_with_keyboard("Choose a setting.", settings_keyboard(), false)
+            .await
+    }
+
+    async fn send_setting_prompt(
+        &self,
+        position: SettingsPosition,
+        settings: &settings::Model,
+    ) -> anyhow::Result<()> {
+        let value = setting_value(settings, position)
+            .context("settings position does not select a reminder schedule")?;
+        self.telegram
+            .send_owner_with_keyboard(
+                &setting_prompt(position, value),
+                setting_prompt_keyboard(),
+                false,
+            )
+            .await
+    }
+
+    async fn process_setting_input(
+        &self,
+        text: &str,
+        runtime: &mut runtime::Model,
+        settings: &mut settings::Model,
+    ) -> anyhow::Result<()> {
+        let position = runtime.settings_position;
+        let current = setting_value(settings, position)
+            .context("settings position does not select a reminder schedule")?
+            .clone();
+        match ReminderMinutes::parse(text) {
+            Ok(value) => {
+                let display = value.to_string();
+                set_setting_value(settings, position, value);
+                runtime.settings_position = SettingsPosition::Settings;
+                self.telegram
+                    .send_owner_with_keyboard(
+                        &format!("{} updated to {}.", setting_label(position), display),
+                        settings_keyboard(),
+                        false,
+                    )
+                    .await?;
+                tracing::info!(setting = setting_key(position), "Telegram setting updated");
+            }
+            Err(_) => {
+                self.telegram
+                    .send_owner_with_keyboard(
+                        &format!(
+                            "Invalid reminder times.\n\n{}",
+                            setting_prompt(position, &current)
+                        ),
+                        setting_prompt_keyboard(),
+                        false,
+                    )
+                    .await?;
+                tracing::info!(
+                    setting = setting_key(position),
+                    "invalid Telegram setting value"
+                );
+            }
+        }
+        Ok(())
     }
 
     async fn apply_event(
@@ -167,11 +331,12 @@ impl App {
         hike: &mut tracker::Model,
         signal: Signal,
         event: Event,
+        settings: &settings::Model,
     ) -> anyhow::Result<()> {
         match signal {
             Signal::Ok => self.apply_ok(hike, event).await,
             Signal::Finished => self.apply_finished(hike, event).await,
-            Signal::Alert => self.apply_alert(hike, event).await,
+            Signal::Alert => self.apply_alert(hike, event, settings).await,
         }
     }
 
@@ -258,7 +423,12 @@ impl App {
         Ok(())
     }
 
-    async fn apply_alert(&self, hike: &mut tracker::Model, event: Event) -> anyhow::Result<()> {
+    async fn apply_alert(
+        &self,
+        hike: &mut tracker::Model,
+        event: Event,
+        settings: &settings::Model,
+    ) -> anyhow::Result<()> {
         if hike.phase != Phase::Active {
             self.start_hike(hike, &event).await?;
             tracing::info!("started a new hike");
@@ -273,7 +443,8 @@ impl App {
         tracing::info!("unrecognized mail safety alert sent");
         hike.safety_alerted = true;
         // Preserve suppression of this interval's scheduled safety reminder.
-        hike.safety_reminders_sent = SAFETY_MINUTES.len() as i64;
+        hike.safety_reminders_sent =
+            i64::try_from(settings.safety_reminder_minutes.as_slice().len())?;
         tracing::info!("unrecognized mail resulted in safety alert delivery");
         Ok(())
     }
@@ -303,6 +474,7 @@ impl App {
     async fn reminders(
         &self,
         hike: &mut tracker::Model,
+        settings: &settings::Model,
         now: DateTimeUtc,
     ) -> anyhow::Result<Option<DateTimeUtc>> {
         if hike.phase != Phase::Active {
@@ -311,8 +483,11 @@ impl App {
         let last_ok = hike.last_ok_at.context("active hike missing last OK")?;
         let mut next: Option<DateTimeUtc> = None;
         for (audience, thresholds) in [
-            (Audience::Owner, OWNER_MINUTES),
-            (Audience::Safety, SAFETY_MINUTES),
+            (Audience::Owner, settings.owner_reminder_minutes.as_slice()),
+            (
+                Audience::Safety,
+                settings.safety_reminder_minutes.as_slice(),
+            ),
         ] {
             let sent = match audience {
                 Audience::Owner => hike.owner_reminders_sent,
@@ -358,6 +533,61 @@ impl App {
         }
         Ok(next)
     }
+}
+
+fn is_inactive(phase: Phase) -> bool {
+    matches!(phase, Phase::Idle | Phase::Finished)
+}
+
+fn setting_value(
+    settings: &settings::Model,
+    position: SettingsPosition,
+) -> Option<&ReminderMinutes> {
+    match position {
+        SettingsPosition::OwnerReminderTimes => Some(&settings.owner_reminder_minutes),
+        SettingsPosition::SafetyReminderTimes => Some(&settings.safety_reminder_minutes),
+        SettingsPosition::Main | SettingsPosition::Settings => None,
+    }
+}
+
+fn set_setting_value(
+    settings: &mut settings::Model,
+    position: SettingsPosition,
+    value: ReminderMinutes,
+) {
+    match position {
+        SettingsPosition::OwnerReminderTimes => settings.owner_reminder_minutes = value,
+        SettingsPosition::SafetyReminderTimes => settings.safety_reminder_minutes = value,
+        SettingsPosition::Main | SettingsPosition::Settings => {
+            unreachable!("settings position does not select a reminder schedule")
+        }
+    }
+}
+
+fn setting_key(position: SettingsPosition) -> &'static str {
+    match position {
+        SettingsPosition::OwnerReminderTimes => "owner_reminder_minutes",
+        SettingsPosition::SafetyReminderTimes => "safety_reminder_minutes",
+        SettingsPosition::Main | SettingsPosition::Settings => "none",
+    }
+}
+
+fn setting_label(position: SettingsPosition) -> &'static str {
+    match position {
+        SettingsPosition::OwnerReminderTimes => "Owner reminder times",
+        SettingsPosition::SafetyReminderTimes => "Safety reminder times",
+        SettingsPosition::Main | SettingsPosition::Settings => {
+            unreachable!("settings position does not select a reminder schedule")
+        }
+    }
+}
+
+fn setting_prompt(position: SettingsPosition, value: &ReminderMinutes) -> String {
+    format!(
+        "{} are currently {}.\nType a new comma-separated list of positive, strictly increasing minutes (for example, 30, 45, 60).",
+        setting_label(position),
+        value,
+    )
 }
 
 fn mail_ok_in_finished_cooldown(
