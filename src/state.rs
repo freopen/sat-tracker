@@ -103,6 +103,12 @@ pub(crate) struct Event {
     pub body: String,
     pub location: Option<String>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Signal {
+    Ok,
+    Finished,
+    Alert,
+}
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Audience {
     Owner,

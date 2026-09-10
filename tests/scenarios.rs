@@ -362,6 +362,27 @@ async fn settings_are_immutable_after_hike_start() {
 }
 
 #[tokio::test]
+async fn mail_start_resets_telegram_settings_conversation_in_same_tick() {
+    let h = Harness::new().await;
+    for (id, text) in [
+        (40, "Settings"),
+        (41, "Owner reminder times"),
+        (42, "5, 10"),
+    ] {
+        h.app
+            .accept_telegram(update(id, 10, START, text), time(START))
+            .await
+            .unwrap();
+    }
+    h.mail("mail-start", "OK", START).await;
+    h.tick(START).await;
+
+    assert_eq!(h.phase().await, Phase::Active);
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![5, 10]);
+    assert_eq!(h.runtime().await.settings_position, SettingsPosition::Main);
+}
+
+#[tokio::test]
 async fn persisted_reminder_schedules_drive_deadlines() {
     let h = Harness::new().await;
     let mut settings = h.settings().await.into_active_model();

@@ -86,6 +86,68 @@ async fn settings_prompt_position_survives_restart() {
 }
 
 #[tokio::test]
+async fn settings_reply_failure_rolls_back_telegram_state_with_the_inbox_row() {
+    let h = Harness::new().await;
+    h.app
+        .accept_telegram(update(10, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.app
+        .accept_telegram(update(11, 10, START, "Owner reminder times"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+
+    h.server.reset().await;
+    Mock::given(path("/bottest/sendMessage"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&h.server)
+        .await;
+    h.app
+        .accept_telegram(update(12, 10, START + 1000, "45, 60"), time(START + 1000))
+        .await
+        .unwrap();
+    assert!(h.app.tick(time(START + 1000)).await.is_err());
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![30]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+    assert_eq!(h.pending_inbox_count().await, 1);
+
+    h.server.reset().await;
+    h.success().await;
+    h.app.tick(time(START + 2000)).await.unwrap();
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![45, 60]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+}
+
+#[tokio::test]
+async fn scheduler_updates_preserve_telegram_runtime_fields() {
+    let h = Harness::new().await;
+    h.app
+        .accept_telegram(update(20, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    h.db.execute_unprepared("UPDATE runtime SET telegram_poll_offset = 42")
+        .await
+        .unwrap();
+
+    h.app.tick(time(START + 1000)).await.unwrap();
+    let runtime = h.runtime().await;
+    assert_eq!(runtime.telegram_poll_offset, 42);
+    assert_eq!(runtime.settings_position, SettingsPosition::Settings);
+}
+
+#[tokio::test]
 async fn later_send_failure_rolls_back_whole_tick_and_replays() {
     let h = Harness::new().await;
     h.server.reset().await;

@@ -4,7 +4,6 @@ mod db;
 pub mod entity;
 mod http;
 mod mail;
-mod messages;
 pub mod migration;
 mod scheduler;
 mod state;

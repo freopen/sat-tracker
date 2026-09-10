@@ -6,15 +6,8 @@ use tracing::error;
 
 use crate::{
     config::Config,
-    state::{Event, RawMail, normalize},
+    state::{Event, RawMail, Signal, normalize},
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Signal {
-    Ok,
-    Finished,
-    Alert,
-}
 
 pub(crate) struct ParsedMail {
     pub(crate) event: Event,
