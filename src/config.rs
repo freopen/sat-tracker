@@ -27,16 +27,20 @@ impl Config {
             .merge(Yaml::file("./config.yaml"))
             .extract()?;
 
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            !config.ok_regex.as_str().is_empty(),
+            !self.ok_regex.as_str().is_empty(),
             "ok_regex must not be empty"
         );
         anyhow::ensure!(
-            !config.finished_regex.as_str().is_empty(),
+            !self.finished_regex.as_str().is_empty(),
             "finished_regex must not be empty"
         );
-
-        Ok(config)
+        Ok(())
     }
 }
 
@@ -50,4 +54,44 @@ where
 {
     let pattern = String::deserialize(deserializer)?;
     Regex::new(&pattern).map_err(D::Error::custom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn value(ok_regex: &str, finished_regex: &str) -> serde_json::Value {
+        serde_json::json!({
+            "ok_regex": ok_regex,
+            "finished_regex": finished_regex,
+            "owner_chat_id": 10,
+            "safety_chat_id": 20,
+            "telegram_bot_token": "test"
+        })
+    }
+
+    #[test]
+    fn config_deserialization_applies_transport_defaults() {
+        let config: Config = serde_json::from_value(value("OK", "FINISHED")).unwrap();
+        assert_eq!(config.telegram_api_url, "https://api.telegram.org");
+        assert!(config.telegram_webhook_url.is_empty());
+    }
+
+    #[test]
+    fn config_rejects_invalid_and_empty_mail_patterns() {
+        assert!(serde_json::from_value::<Config>(value("[", "FINISHED")).is_err());
+        let mut empty = Config {
+            ok_regex: Regex::new("").unwrap(),
+            finished_regex: Regex::new("FINISHED").unwrap(),
+            owner_chat_id: 10,
+            safety_chat_id: 20,
+            telegram_api_url: String::new(),
+            telegram_webhook_url: String::new(),
+            telegram_bot_token: "test".to_owned(),
+        };
+        assert!(empty.validate().is_err());
+        empty.ok_regex = Regex::new("OK").unwrap();
+        empty.finished_regex = Regex::new("").unwrap();
+        assert!(empty.validate().is_err());
+    }
 }

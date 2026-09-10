@@ -1,94 +1,44 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
+use crate::{
+    App, Config,
+    entity::runtime,
+    state::{Audience, Phase},
 };
-
-use durable_actions::{Handle, HandlerError};
+use chrono::{Duration as ChronoDuration, Utc};
 use frankenstein::{
     AsyncTelegramApi,
     client_reqwest::Bot,
     methods::{DeleteWebhookParams, GetUpdatesParams, SendMessageParams, SetWebhookParams},
-    types::AllowedUpdate,
+    types::{AllowedUpdate, KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup},
 };
-use tokio::task::AbortHandle;
-use tracing::{error, info};
+use sea_orm::EntityTrait;
+use std::{sync::Arc, time::Duration};
 
-use crate::{actions::ProcessTelegram, config::Config, state::Audience};
-
-const TELEGRAM_CHUNK: usize = 4000;
-const LONG_POLL_TIMEOUT: u32 = 30;
-const RETRY_DELAY: Duration = Duration::from_secs(1);
-
-#[derive(Clone)]
 pub(crate) struct Telegram {
     bot: Bot,
     owner_chat_id: i64,
     safety_chat_id: i64,
-    polling_enabled: bool,
-    listener: Arc<Mutex<Option<AbortHandle>>>,
 }
-
 impl Telegram {
-    pub(crate) async fn new(config: &Config) -> anyhow::Result<Self> {
-        let api_url = format!(
-            "{}/bot{}",
-            config.telegram_api_url.trim_end_matches('/'),
-            config.telegram_bot_token
-        );
-        let host = frankenstein::reqwest::Url::parse(&api_url)?
-            .host_str()
-            .ok_or_else(|| anyhow::anyhow!("TELEGRAM_API_URL has no host"))?
-            .to_owned();
-        let retry = frankenstein::reqwest::retry::for_host(host)
-            .max_retries_per_request(3)
-            .classify_fn(|request| {
-                if request.error().is_some()
-                    || request.status().is_some_and(|status| {
-                        status == frankenstein::reqwest::StatusCode::TOO_MANY_REQUESTS
-                            || status.is_server_error()
-                    })
-                {
-                    request.retryable()
-                } else {
-                    request.success()
-                }
-            });
+    pub(crate) fn new(config: &Config) -> anyhow::Result<Self> {
         let client = frankenstein::reqwest::Client::builder()
-            .retry(retry)
+            .retry(frankenstein::reqwest::retry::never())
+            .timeout(Duration::from_secs(40))
+            .connect_timeout(Duration::from_secs(10))
             .build()?;
-        let telegram = Self {
-            bot: Bot::builder().api_url(api_url).client(client).build(),
+        Ok(Self {
+            bot: Bot::builder()
+                .api_url(format!(
+                    "{}/bot{}",
+                    config.telegram_api_url.trim_end_matches('/'),
+                    config.telegram_bot_token
+                ))
+                .client(client)
+                .build(),
             owner_chat_id: config.owner_chat_id,
             safety_chat_id: config.safety_chat_id,
-            polling_enabled: config.telegram_webhook_url.trim().is_empty(),
-            listener: Arc::new(Mutex::new(None)),
-        };
-        telegram
-            .configure_webhook(&config.telegram_webhook_url)
-            .await?;
-        Ok(telegram)
+        })
     }
-
-    pub(crate) async fn send(&self, audience: Audience, text: &str) -> Result<(), HandlerError> {
-        let chat_id = match audience {
-            Audience::Owner => self.owner_chat_id,
-            Audience::Safety => self.safety_chat_id,
-        };
-        for chunk in split(text) {
-            self.bot
-                .send_message(
-                    &SendMessageParams::builder()
-                        .chat_id(chat_id)
-                        .text(chunk)
-                        .build(),
-                )
-                .await
-                .map_err(|error| Box::new(error) as HandlerError)?;
-        }
-        Ok(())
-    }
-
-    async fn configure_webhook(&self, url: &str) -> anyhow::Result<()> {
+    pub(crate) async fn configure(&self, url: &str) -> anyhow::Result<()> {
         if url.trim().is_empty() {
             self.bot
                 .delete_webhook(&DeleteWebhookParams::builder().build())
@@ -104,77 +54,204 @@ impl Telegram {
         }
         Ok(())
     }
-
-    pub(crate) fn start_listener(&self, handle: Handle) {
-        if !self.polling_enabled {
-            return;
-        }
-        let telegram = self.clone();
-        let listener = tokio::spawn(async move { telegram.listen(handle).await });
-        let abort_handle = listener.abort_handle();
-        drop(listener);
-        self.listener.lock().unwrap().replace(abort_handle);
+    pub(crate) async fn send(&self, audience: Audience, text: &str) -> anyhow::Result<()> {
+        let chat_id = match audience {
+            Audience::Owner => self.owner_chat_id,
+            Audience::Safety => self.safety_chat_id,
+        };
+        self.bot
+            .send_message(
+                &SendMessageParams::builder()
+                    .chat_id(chat_id)
+                    .text(text)
+                    .build(),
+            )
+            .await?;
+        Ok(())
     }
 
-    pub(crate) fn abort_listener(&self) {
-        if let Some(listener) = self.listener.lock().unwrap().take() {
-            listener.abort();
-        }
+    pub(crate) async fn send_owner(
+        &self,
+        text: &str,
+        phase: Phase,
+        disable_notification: bool,
+    ) -> anyhow::Result<()> {
+        self.bot
+            .send_message(
+                &SendMessageParams::builder()
+                    .chat_id(self.owner_chat_id)
+                    .text(text)
+                    .disable_notification(disable_notification)
+                    .reply_markup(owner_keyboard(phase))
+                    .build(),
+            )
+            .await?;
+        Ok(())
     }
+}
 
-    async fn listen(&self, handle: Handle) {
-        let mut offset = 0_i64;
-        loop {
-            let params = GetUpdatesParams::builder()
-                .offset(offset)
-                .limit(100)
-                .timeout(LONG_POLL_TIMEOUT)
-                .allowed_updates(vec![AllowedUpdate::Message])
-                .build();
-            let updates = match self.bot.get_updates(&params).await {
-                Ok(response) => response.result,
-                Err(error) => {
-                    error!(%error, "telegram long polling failed");
-                    tokio::time::sleep(RETRY_DELAY).await;
-                    continue;
-                }
-            };
+pub(crate) fn owner_keyboard(phase: Phase) -> ReplyMarkup {
+    let texts: &[&str] = match phase {
+        Phase::Active => &["OK", "FINISHED"],
+        Phase::Idle | Phase::Finished => &["Start hike"],
+    };
+    let keyboard = texts
+        .iter()
+        .map(|text| KeyboardButton::builder().text(*text).build())
+        .collect();
+    ReplyMarkup::ReplyKeyboardMarkup(
+        ReplyKeyboardMarkup::builder()
+            .keyboard(vec![keyboard])
+            .is_persistent(true)
+            .resize_keyboard(true)
+            .build(),
+    )
+}
 
-            for update in updates {
-                let update_id = update.update_id;
-                info!(update_id, "new Telegram update");
-                if let Err(error) = handle.enqueue::<ProcessTelegram>(&update).await {
-                    error!(%error, update_id, "failed to durably enqueue Telegram update");
-                    tokio::time::sleep(RETRY_DELAY).await;
-                    break;
+pub(crate) async fn listen(app: Arc<App>) -> anyhow::Result<()> {
+    let mut shutdown = app.shutdown.subscribe();
+    loop {
+        if *shutdown.borrow() {
+            return Ok(());
+        }
+        tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            result = poll(&app) => if let Err(error) = result {
+                tracing::error!(error = %safe_error(&error), "Telegram polling failed");
+                tokio::select! {
+                    _ = shutdown.changed() => return Ok(()),
+                    _ = tokio::time::sleep(retry_delay(&error).to_std().unwrap_or_default()) => {},
                 }
-                offset = i64::from(update_id) + 1;
             }
         }
     }
 }
+async fn poll(app: &App) -> anyhow::Result<()> {
+    let offset = runtime::Entity::find_by_id(1)
+        .one(&app.db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing runtime"))?
+        .telegram_poll_offset;
+    let updates = app
+        .telegram
+        .bot
+        .get_updates(
+            &GetUpdatesParams::builder()
+                .offset(offset)
+                .limit(100)
+                .timeout(30)
+                .allowed_updates(vec![AllowedUpdate::Message])
+                .build(),
+        )
+        .await?
+        .result;
+    for update in updates {
+        tracing::info!(update_id = update.update_id, "new Telegram update");
+        app.accept_update(update, Utc::now(), true).await?;
+    }
+    Ok(())
+}
+pub(crate) fn retry_delay(error: &anyhow::Error) -> ChronoDuration {
+    let seconds = match error.downcast_ref::<frankenstein::Error>() {
+        Some(frankenstein::Error::Api(response)) => response
+            .parameters
+            .and_then(|p| p.retry_after)
+            .map(u64::from)
+            .unwrap_or(0),
+        _ => 0,
+    };
+    ChronoDuration::seconds(i64::try_from(seconds.max(5)).unwrap_or(i64::MAX))
+}
+// Telegram errors can contain the token-bearing URL or raw response bodies.
+pub(crate) fn safe_error(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<frankenstein::Error>() {
+        Some(frankenstein::Error::Api(response)) => {
+            format!("Telegram API error {}", response.error_code)
+        }
+        Some(_) => "Telegram request failed".to_owned(),
+        None => error.to_string(),
+    }
+}
 
-pub(crate) fn split(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return vec!["(empty message body)".to_owned()];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Command {
+    Start,
+    StartHike,
+    Ok,
+    Finished,
+    Version,
+}
+pub(crate) fn command(text: &str) -> Option<Command> {
+    match text.trim() {
+        "Start hike" => return Some(Command::StartHike),
+        "OK" => return Some(Command::Ok),
+        "FINISHED" => return Some(Command::Finished),
+        _ => {}
     }
-    let mut chunks = Vec::new();
-    let mut rest = text;
-    while rest.chars().count() > TELEGRAM_CHUNK {
-        let byte = rest
-            .char_indices()
-            .nth(TELEGRAM_CHUNK)
-            .map(|(index, _)| index)
-            .unwrap_or(rest.len());
-        let preferred = rest[..byte]
-            .rfind('\n')
-            .filter(|index| *index > byte / 2)
-            .unwrap_or(byte);
-        chunks.push(rest[..preferred].to_owned());
-        rest = rest[preferred..].trim_start_matches('\n');
+    let first = text.split_whitespace().next()?;
+    let name = match first.split_once('@') {
+        Some((name, suffix)) if !suffix.is_empty() => name,
+        Some(_) => return None,
+        None => first,
+    };
+    match name {
+        "/start" => Some(Command::Start),
+        "/version" => Some(Command::Version),
+        _ => None,
     }
-    if !rest.is_empty() {
-        chunks.push(rest.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owner_commands_use_friendly_labels_and_keep_version() {
+        assert_eq!(command("/start"), Some(Command::Start));
+        assert_eq!(command("/start@tracker"), Some(Command::Start));
+        assert_eq!(command("Start hike"), Some(Command::StartHike));
+        assert_eq!(command(" OK "), Some(Command::Ok));
+        assert_eq!(command("FINISHED"), Some(Command::Finished));
+        assert_eq!(command("/version"), Some(Command::Version));
+        assert_eq!(command("/ok"), None);
+        assert_eq!(command("/finished"), None);
     }
-    chunks
+
+    #[test]
+    fn owner_keyboard_serializes_phase_specific_one_time_buttons() {
+        let inactive = serde_json::to_value(owner_keyboard(Phase::Finished)).unwrap();
+        assert_eq!(
+            inactive["keyboard"],
+            serde_json::json!([[{"text": "Start hike"}]])
+        );
+        assert_eq!(inactive["is_persistent"], true);
+        assert_eq!(inactive["resize_keyboard"], true);
+
+        let active = serde_json::to_value(owner_keyboard(Phase::Active)).unwrap();
+        assert_eq!(
+            active["keyboard"],
+            serde_json::json!([[{"text": "OK"}, {"text": "FINISHED"}]])
+        );
+    }
+
+    #[test]
+    fn telegram_retry_after_is_a_floor_and_errors_do_not_leak_payloads() {
+        let error: anyhow::Error =
+            frankenstein::Error::Api(frankenstein::response::ErrorResponse {
+                ok: false,
+                description: "private message".to_owned(),
+                error_code: 429,
+                parameters: Some(frankenstein::response::ResponseParameters {
+                    migrate_to_chat_id: None,
+                    retry_after: Some(12),
+                }),
+            })
+            .into();
+        assert_eq!(retry_delay(&error), ChronoDuration::seconds(12));
+        assert_eq!(safe_error(&error), "Telegram API error 429");
+        assert_eq!(
+            retry_delay(&anyhow::anyhow!("database unavailable")),
+            ChronoDuration::seconds(5)
+        );
+    }
 }
