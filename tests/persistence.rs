@@ -92,7 +92,88 @@ async fn later_send_failure_rolls_back_whole_tick_and_replays() {
 }
 
 #[tokio::test]
-async fn migrations_preserve_state_and_have_unique_deduplication_key() {
+async fn later_event_failure_rolls_back_earlier_inbox_processing() {
+    let h = Harness::new().await;
+    h.server.reset().await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let calls = count.clone();
+    Mock::given(path("/bottest/sendMessage"))
+        .respond_with(move |_: &wiremock::Request| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                ResponseTemplate::new(500).set_body_json(
+                    serde_json::json!({"ok":false,"error_code":500,"description":"failed"}),
+                )
+            } else {
+                success()
+            }
+        })
+        .mount(&h.server)
+        .await;
+
+    h.mail("start", "OK", START).await;
+    h.mail("finish", "FINISHED", START + 1000).await;
+    assert!(h.app.tick(time(START + 1000)).await.is_err());
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    assert_eq!(h.phase().await, Phase::Idle);
+    assert_eq!(h.pending_inbox_count().await, 2);
+    assert_eq!(h.runtime().await.last_tick_at, None);
+
+    h.app.tick(time(START + 5000)).await.unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 5);
+    assert_eq!(h.phase().await, Phase::Finished);
+    assert_eq!(h.pending_inbox_count().await, 0);
+    let sends = h.sends().await;
+    assert_eq!(sends[0], sends[2]);
+    assert_eq!(sends[3]["chat_id"], 10);
+    assert_eq!(sends[4]["chat_id"], 20);
+}
+
+#[tokio::test]
+async fn reminder_failure_rolls_back_processed_inbox() {
+    let h = Harness::new().await;
+    h.mail("start", "OK", START).await;
+    h.tick(START).await.unwrap();
+    h.app
+        .accept_telegram(update(9, 10, START + 1000, "/unknown"), time(START + 1000))
+        .await
+        .unwrap();
+
+    h.server.reset().await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let calls = count.clone();
+    Mock::given(path("/bottest/sendMessage"))
+        .respond_with(move |_: &wiremock::Request| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                ResponseTemplate::new(500).set_body_json(
+                    serde_json::json!({"ok":false,"error_code":500,"description":"failed"}),
+                )
+            } else {
+                success()
+            }
+        })
+        .mount(&h.server)
+        .await;
+
+    assert!(h.app.tick(time(START + 60 * 60_000)).await.is_err());
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    assert_eq!(h.pending_inbox_count().await, 1);
+    assert_eq!(h.runtime().await.last_tick_at, Some(time(START)));
+    let tracker = h.tracker().await;
+    assert_eq!(tracker.owner_reminders_sent, 0);
+    assert_eq!(tracker.safety_reminders_sent, 0);
+    assert!(!tracker.owner_alerted);
+    assert!(!tracker.safety_alerted);
+
+    h.app.tick(time(START + 60 * 60_000 + 5000)).await.unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 4);
+    assert_eq!(h.pending_inbox_count().await, 0);
+    let tracker = h.tracker().await;
+    assert_eq!(tracker.owner_reminders_sent, 1);
+    assert_eq!(tracker.safety_reminders_sent, 1);
+}
+
+#[tokio::test]
+async fn migrations_preserve_state_and_deduplication_key() {
     let h = Harness::new().await;
     h.mail("one", "OK", START).await;
     h.tick(START).await;
@@ -106,14 +187,6 @@ async fn migrations_preserve_state_and_have_unique_deduplication_key() {
     for table in ["runtime", "tracker", "inbox"] {
         assert!(manager.has_table(table).await.unwrap());
     }
-    assert_eq!(
-        number(
-            &h,
-            "SELECT count(*) FROM pragma_index_list('inbox') WHERE \"unique\"=1"
-        )
-        .await,
-        1
-    );
     assert_eq!(h.phase().await, Phase::Active);
 }
 

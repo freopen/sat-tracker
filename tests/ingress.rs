@@ -111,6 +111,7 @@ async fn http_acknowledges_only_committed_input_and_reports_lock_timeout() {
         StatusCode::NO_CONTENT
     );
     let response = router
+        .clone()
         .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -118,7 +119,24 @@ async fn http_acknowledges_only_committed_input_and_reports_lock_timeout() {
 }
 
 #[tokio::test]
-async fn webhook_accepts_json_and_telegram_polling_resumes_persisted_offset() {
+async fn http_rejects_malformed_telegram_json() {
+    let h = Harness::new().await;
+    let router = sat_tracker::router(h.app.clone());
+    let response = router
+        .oneshot(
+            Request::post("/tg")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(h.inbox_count().await, 0);
+}
+
+#[tokio::test]
+async fn webhook_accepts_json() {
     let h = Harness::new().await;
     let router = sat_tracker::router(h.app.clone());
     let request = Request::post("/tg")
@@ -132,6 +150,13 @@ async fn webhook_accepts_json_and_telegram_polling_resumes_persisted_offset() {
         StatusCode::NO_CONTENT
     );
     h.tick(START).await;
+    assert_eq!(h.inbox_count().await, 1);
+    assert_eq!(h.sends().await.len(), 1);
+}
+
+#[tokio::test]
+async fn telegram_polling_resumes_persisted_offset_and_deduplicates() {
+    let h = Harness::new().await;
     let mut runtime = runtime::Entity::find_by_id(1)
         .one(&h.db)
         .await
@@ -148,12 +173,23 @@ async fn webhook_accepts_json_and_telegram_polling_resumes_persisted_offset() {
         .await;
     let polls = Arc::new(AtomicUsize::new(0));
     let count = polls.clone();
-    Mock::given(path("/bottest/getUpdates")).respond_with(move |request: &wiremock::Request| {
-        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        let first = count.fetch_add(1, Ordering::SeqCst) == 0;
-        assert_eq!(body["offset"], if first { 42 } else { 43 });
-        ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true,"result":if first { vec![update(42, 10, START, "/version")] } else { vec![] }})).set_delay(Duration::from_millis(30))
-    }).mount(&h.server).await;
+    Mock::given(path("/bottest/getUpdates"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let first = count.fetch_add(1, Ordering::SeqCst) == 0;
+            assert_eq!(body["offset"], if first { 42 } else { 43 });
+            let result = if first {
+                let duplicate = update(42, 10, START, "/version");
+                vec![duplicate.clone(), duplicate]
+            } else {
+                vec![]
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok":true,"result":result}))
+                .set_delay(Duration::from_millis(30))
+        })
+        .mount(&h.server)
+        .await;
     let mut cfg = config(h.server.uri());
     cfg.telegram_webhook_url.clear();
     let app = Arc::new(
@@ -183,6 +219,7 @@ async fn webhook_accepts_json_and_telegram_polling_resumes_persisted_offset() {
     app.shutdown();
     runner.await.unwrap().unwrap();
     assert_eq!(h.runtime().await.telegram_poll_offset, 43);
+    assert_eq!(h.inbox_count().await, 1);
 }
 
 #[tokio::test]

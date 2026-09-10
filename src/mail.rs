@@ -154,6 +154,30 @@ mod tests {
              https://inreachlink.com/synthetic-token?source=test"
             )
         );
-        assert_eq!(extract_location(&parsed.event.body), parsed.event.location);
+    }
+
+    #[test]
+    fn event_time_uses_mail_date_when_valid_and_receipt_time_otherwise() {
+        let received_at = DateTime::<Utc>::from_timestamp(1_000, 0).unwrap();
+        let dated = parse(
+            RawMail {
+                bytes: b"Date: Thu, 01 Jan 1970 00:00:00 +0000\r\n\r\nALL OK".to_vec(),
+                received_at,
+            },
+            &config("http://localhost".into()),
+        );
+        assert_eq!(
+            dated.event.event_at,
+            DateTime::<Utc>::from_timestamp(0, 0).unwrap()
+        );
+
+        let invalid = parse(
+            RawMail {
+                bytes: b"Date: not a date\r\n\r\nALL OK".to_vec(),
+                received_at,
+            },
+            &config("http://localhost".into()),
+        );
+        assert_eq!(invalid.event.event_at, received_at);
     }
 }

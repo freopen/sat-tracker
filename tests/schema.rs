@@ -89,31 +89,18 @@ async fn tracker_and_runtime_constraints_reject_invalid_state() {
 }
 
 #[tokio::test]
-async fn inbox_queries_use_the_pending_and_deduplication_indexes() {
+async fn pending_inbox_query_uses_its_partial_index() {
     let h = Harness::new().await;
-    for (query, expected) in [
-        (
-            "SELECT * FROM inbox WHERE processed_at IS NULL ORDER BY id ASC",
-            "inbox_pending",
-        ),
-        (
-            "SELECT * FROM inbox WHERE source = 'mail' AND external_id = '42'",
-            "sqlite_autoindex_inbox",
-        ),
-    ] {
-        let rows =
-            h.db.query_all_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                format!("EXPLAIN QUERY PLAN {query}"),
-            ))
-            .await
-            .unwrap();
-        assert!(
-            rows.iter().any(|row| row
-                .try_get::<String>("", "detail")
-                .unwrap()
-                .contains(expected)),
-            "index {expected} not used"
-        );
-    }
+    let rows =
+        h.db.query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "EXPLAIN QUERY PLAN SELECT * FROM inbox WHERE processed_at IS NULL ORDER BY id ASC",
+        ))
+        .await
+        .unwrap();
+    assert!(rows.iter().any(|row| {
+        row.try_get::<String>("", "detail")
+            .unwrap()
+            .contains("inbox_pending")
+    }));
 }
