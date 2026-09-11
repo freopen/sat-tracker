@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use sat_tracker::{Phase, entity::inbox};
+use sat_tracker::{Phase, SettingsPosition, entity::inbox};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait, QueryFilter, Statement,
 };
@@ -52,12 +52,108 @@ async fn reopen_processes_pending_events_and_overdue_reminders() {
 }
 
 #[tokio::test]
+async fn settings_prompt_position_survives_restart() {
+    let h = Harness::new().await;
+    h.app
+        .accept_telegram(update(1, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.app
+        .accept_telegram(
+            update(2, 10, START + 1000, "Owner reminder times"),
+            time(START + 1000),
+        )
+        .await
+        .unwrap();
+    h.tick(START + 1000).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+
+    let reopened = reopen(&h).await;
+    reopened
+        .accept_telegram(update(3, 10, START + 2000, "30, 45"), time(START + 2000))
+        .await
+        .unwrap();
+    reopened.tick(time(START + 2000)).await.unwrap();
+
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![30, 45]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+}
+
+#[tokio::test]
+async fn settings_reply_failure_rolls_back_telegram_state_with_the_inbox_row() {
+    let h = Harness::new().await;
+    h.app
+        .accept_telegram(update(10, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.app
+        .accept_telegram(update(11, 10, START, "Owner reminder times"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+
+    h.server.reset().await;
+    Mock::given(path("/bottest/sendRichMessage"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&h.server)
+        .await;
+    h.app
+        .accept_telegram(update(12, 10, START + 1000, "45, 60"), time(START + 1000))
+        .await
+        .unwrap();
+    assert!(h.app.tick(time(START + 1000)).await.is_err());
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![30]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::OwnerReminderTimes
+    );
+    assert_eq!(h.pending_inbox_count().await, 1);
+
+    h.server.reset().await;
+    h.success().await;
+    h.app.tick(time(START + 2000)).await.unwrap();
+    assert_eq!(h.settings().await.owner_reminder_minutes.0, vec![45, 60]);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+}
+
+#[tokio::test]
+async fn scheduler_updates_preserve_telegram_runtime_fields() {
+    let h = Harness::new().await;
+    h.app
+        .accept_telegram(update(20, 10, START, "Settings"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    h.db.execute_unprepared("UPDATE runtime SET telegram_poll_offset = 42")
+        .await
+        .unwrap();
+
+    h.app.tick(time(START + 1000)).await.unwrap();
+    let runtime = h.runtime().await;
+    assert_eq!(runtime.telegram_poll_offset, 42);
+    assert_eq!(runtime.settings_position, SettingsPosition::Settings);
+}
+
+#[tokio::test]
 async fn later_send_failure_rolls_back_whole_tick_and_replays() {
     let h = Harness::new().await;
     h.server.reset().await;
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 ResponseTemplate::new(500).set_body_json(
@@ -69,7 +165,7 @@ async fn later_send_failure_rolls_back_whole_tick_and_replays() {
         })
         .mount(&h.server)
         .await;
-    h.mail("unknown", "HELP", START).await; // start succeeds, safety fails
+    h.mail("alert-mail", "HELP", START).await; // start succeeds, safety fails
     assert!(h.app.tick(time(START)).await.is_err());
     assert_eq!(count.load(Ordering::SeqCst), 2); // no hidden retry
     assert_eq!(h.phase().await, Phase::Idle);
@@ -84,7 +180,7 @@ async fn later_send_failure_rolls_back_whole_tick_and_replays() {
     );
     assert_eq!(h.runtime().await.last_tick_at, None);
     reopen(&h).await.tick(time(START + 5000)).await.unwrap();
-    assert_eq!(count.load(Ordering::SeqCst), 4);
+    assert_eq!(count.load(Ordering::SeqCst), 5);
     assert_eq!(h.phase().await, Phase::Active);
     let sends = h.sends().await;
     assert_eq!(sends[0], sends[2]);
@@ -97,7 +193,7 @@ async fn later_event_failure_rolls_back_earlier_inbox_processing() {
     h.server.reset().await;
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 ResponseTemplate::new(500).set_body_json(
@@ -119,13 +215,12 @@ async fn later_event_failure_rolls_back_earlier_inbox_processing() {
     assert_eq!(h.runtime().await.last_tick_at, None);
 
     h.app.tick(time(START + 5000)).await.unwrap();
-    assert_eq!(count.load(Ordering::SeqCst), 6);
+    assert_eq!(count.load(Ordering::SeqCst), 5);
     assert_eq!(h.phase().await, Phase::Finished);
     assert_eq!(h.pending_inbox_count().await, 0);
     let sends = h.sends().await;
     assert_eq!(sends[0], sends[2]);
     assert_eq!(sends[4]["chat_id"], 10);
-    assert_eq!(sends[5]["chat_id"], 20);
 }
 
 #[tokio::test]
@@ -141,7 +236,7 @@ async fn reminder_failure_rolls_back_processed_inbox() {
     h.server.reset().await;
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 ResponseTemplate::new(500).set_body_json(
@@ -184,7 +279,7 @@ async fn migrations_preserve_state_and_deduplication_key() {
         .unwrap();
     assert_eq!(h.inbox_count().await, 1);
     let manager = SchemaManager::new(&h.db);
-    for table in ["runtime", "tracker", "inbox"] {
+    for table in ["runtime", "tracker", "inbox", "settings"] {
         assert!(manager.has_table(table).await.unwrap());
     }
     assert_eq!(h.phase().await, Phase::Active);
@@ -213,7 +308,7 @@ async fn legacy_database_without_migration_history_is_reset() {
             .await
             .unwrap()
             .len(),
-        1
+        3
     );
     reopened.tick(time(START)).await.unwrap();
     assert_eq!(h.sends().await.len(), 2);
@@ -236,14 +331,14 @@ async fn unknown_migration_fails_without_resetting_data() {
     );
     assert_eq!(h.phase().await, Phase::Active);
     assert_eq!(h.inbox_count().await, 1);
-    assert_eq!(number(&h, "SELECT count(*) FROM seaql_migrations").await, 2);
+    assert_eq!(number(&h, "SELECT count(*) FROM seaql_migrations").await, 4);
 }
 
 #[tokio::test]
 async fn empty_migration_history_applies_initial_migration() {
     let h = Harness::new().await;
     h.db.execute_unprepared(
-        "DROP TABLE inbox; DROP TABLE tracker; DROP TABLE runtime; DELETE FROM seaql_migrations;",
+        "DROP TABLE inbox; DROP TABLE tracker; DROP TABLE runtime; DROP TABLE settings; DELETE FROM seaql_migrations;",
     )
     .await
     .unwrap();
@@ -254,6 +349,6 @@ async fn empty_migration_history_applies_initial_migration() {
             .await
             .unwrap()
             .len(),
-        1
+        3
     );
 }

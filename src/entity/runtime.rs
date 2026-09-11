@@ -1,4 +1,4 @@
-use crate::state::DateTimeUtc;
+use crate::state::{DateTimeUtc, SettingsPosition};
 use sea_orm::entity::prelude::*;
 
 /// Process-wide durable scheduling state. The migration enforces id = 1.
@@ -9,6 +9,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: i64,
     pub telegram_poll_offset: i64,
+    pub settings_position: SettingsPosition,
     pub last_tick_at: Option<DateTimeUtc>,
     pub next_tick_at: Option<DateTimeUtc>,
 }

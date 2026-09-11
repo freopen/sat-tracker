@@ -29,7 +29,7 @@ async fn ingress_waits_for_inline_send_then_commits_and_wakes() {
     h.server.reset().await;
     let entered = Arc::new(Notify::new());
     let signal = entered.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             signal.notify_one();
             success().set_delay(Duration::from_millis(300))
@@ -282,7 +282,7 @@ async fn retry_after_delays_the_whole_tick_even_when_ingress_wakes_scheduler() {
     let counter = calls.clone();
     let first_at = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
     let recorded = first_at.clone();
-    Mock::given(path("/bottest/sendMessage")).respond_with(move |_: &wiremock::Request| {
+    Mock::given(path("/bottest/sendRichMessage")).respond_with(move |_: &wiremock::Request| {
         if counter.fetch_add(1, Ordering::SeqCst) == 0 {
             *recorded.lock().unwrap() = Some(std::time::Instant::now());
             notify.notify_one();
@@ -315,5 +315,5 @@ async fn retry_after_delays_the_whole_tick_even_when_ingress_wakes_scheduler() {
     .unwrap();
     h.app.shutdown();
     runner.await.unwrap().unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 4);
+    assert_eq!(calls.load(Ordering::SeqCst), 5);
 }

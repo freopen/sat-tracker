@@ -1,6 +1,6 @@
 [package]
 name = "sat-tracker"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 build = "build.rs"
 
@@ -8,11 +8,12 @@ build = "build.rs"
 anyhow = "1"
 axum = "0.8"
 chrono = "0.4"
-sea-orm = { version = "2.0.2", default-features = false, features = ["macros", "sqlx-sqlite", "runtime-tokio-rustls", "with-chrono"] }
+sea-orm = { version = "2.0.2", default-features = false, features = ["macros", "sqlx-sqlite", "runtime-tokio-rustls", "with-chrono", "with-json"] }
 sea-orm-migration = { version = "2.0.2", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "with-chrono"] }
 figment = { version = "0.10", features = ["yaml"] }
 frankenstein = { version = "0.52", features = ["client-reqwest"] }
 mail-parser = "0.11"
+minijinja = { version = "2", features = ["fuel"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

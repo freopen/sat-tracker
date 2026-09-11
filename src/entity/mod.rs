@@ -2,4 +2,5 @@
 //! separately under `crate::migration`.
 pub mod inbox;
 pub mod runtime;
+pub mod settings;
 pub mod tracker;

@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use frankenstein::updates::Update;
 use sat_tracker::{
     App, Config, Phase,
-    entity::{inbox, runtime, tracker},
+    entity::{inbox, runtime, settings, tracker},
 };
 use sea_orm::{
     ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
@@ -63,7 +63,7 @@ impl Harness {
     }
     pub async fn success(&self) {
         Mock::given(method("POST"))
-            .and(path("/bottest/sendMessage"))
+            .and(path("/bottest/sendRichMessage"))
             .respond_with(success())
             .mount(&self.server)
             .await;
@@ -98,6 +98,13 @@ impl Harness {
             .unwrap()
             .unwrap()
     }
+    pub async fn settings(&self) -> settings::Model {
+        settings::Entity::find_by_id(1)
+            .one(&self.db)
+            .await
+            .unwrap()
+            .unwrap()
+    }
     pub async fn inbox_count(&self) -> u64 {
         inbox::Entity::find().count(&self.db).await.unwrap()
     }
@@ -114,8 +121,20 @@ impl Harness {
             .await
             .unwrap()
             .into_iter()
-            .filter(|r| r.url.path().ends_with("sendMessage"))
-            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .filter(|r| r.url.path().ends_with("sendRichMessage"))
+            .map(|r| {
+                let mut value: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                if let Some(markdown) = value
+                    .get("rich_message")
+                    .and_then(|message| message.get("markdown"))
+                    .cloned()
+                {
+                    // Keep the test-facing helper convenient while asserting the
+                    // production wire format through the rich_message field.
+                    value["text"] = markdown;
+                }
+                value
+            })
             .collect()
     }
 }
