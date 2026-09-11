@@ -40,9 +40,12 @@ impl App {
             .await?
             .context("missing tracker")?;
 
+        let saved_settings = self.load_settings(tx).await?;
+        self.telegram.sync_templates(&saved_settings)?;
         self.telegram.sync_phase(tx, hike.phase).await?;
         self.process_pending_inbox(tx, &mut hike, now).await?;
         let settings = self.load_settings(tx).await?;
+        self.telegram.sync_templates(&settings)?;
         let next = self.reminders(&mut hike, &settings, now).await?;
 
         hike.into_active_model().reset_all().update(tx).await?;
@@ -100,7 +103,7 @@ impl App {
                     tracing::info!("mail OK ignored during finished-hike cooldown");
                 } else {
                     let settings = self.load_settings(tx).await?;
-                    self.apply_event(hike, parsed.signal, parsed.event, &settings)
+                    self.apply_event(hike, parsed.signal, parsed.event, &settings, now)
                         .await?;
                 }
             }
@@ -111,7 +114,8 @@ impl App {
                     .await?
                 {
                     let settings = self.load_settings(tx).await?;
-                    self.apply_event(hike, signal, event, &settings).await?;
+                    self.apply_event(hike, signal, event, &settings, now)
+                        .await?;
                 }
             }
         }
@@ -136,17 +140,24 @@ impl App {
         signal: Signal,
         event: Event,
         settings: &settings::Model,
+        now: DateTimeUtc,
     ) -> anyhow::Result<()> {
         match signal {
-            Signal::Ok => self.apply_ok(hike, event).await,
+            Signal::Ok => self.apply_ok(hike, event, settings, now).await,
             Signal::Finished => self.apply_finished(hike, event).await,
-            Signal::Alert => self.apply_alert(hike, event, settings).await,
+            Signal::Alert => self.apply_alert(hike, event, settings, now).await,
         }
     }
 
-    async fn apply_ok(&self, hike: &mut tracker::Model, event: Event) -> anyhow::Result<()> {
+    async fn apply_ok(
+        &self,
+        hike: &mut tracker::Model,
+        event: Event,
+        settings: &settings::Model,
+        now: DateTimeUtc,
+    ) -> anyhow::Result<()> {
         if hike.phase == Phase::Active {
-            self.refresh_active_hike(hike, event).await?;
+            self.refresh_active_hike(hike, event, settings, now).await?;
         } else {
             self.start_hike(hike, &event).await?;
             tracing::info!("started a new hike");
@@ -161,26 +172,25 @@ impl App {
         &self,
         hike: &mut tracker::Model,
         event: Event,
+        settings: &settings::Model,
+        now: DateTimeUtc,
     ) -> anyhow::Result<()> {
         let at = event.event_at;
         if at <= hike.last_ok_at.context("active hike missing last OK")? {
             tracing::info!("OK ignored stale event");
             return Ok(());
         }
-        let was_alerted = hike.owner_alerted || hike.safety_alerted;
         if hike.owner_alerted {
-            self.telegram
-                .notify_recovery(Audience::Owner, &event)
-                .await?;
+            self.telegram.notify_recovery(&event).await?;
             tracing::info!("owner recovery message sent");
         }
         if hike.safety_alerted {
             self.telegram
-                .notify_recovery(Audience::Safety, &event)
+                .notify_safety_recovery(hike, settings, &event, now)
                 .await?;
             tracing::info!("safety recovery message sent");
         }
-        if was_alerted {
+        if hike.owner_alerted || hike.safety_alerted {
             tracing::info!("OK resulted in contact recovery");
         } else {
             tracing::info!("OK refreshed active hike");
@@ -210,14 +220,8 @@ impl App {
             tracing::info!("finished ignored stale event");
             return Ok(());
         }
-        self.telegram
-            .notify_finished(Audience::Owner, &event)
-            .await?;
+        self.telegram.notify_finished(&event).await?;
         tracing::info!("owner finished message sent");
-        self.telegram
-            .notify_finished(Audience::Safety, &event)
-            .await?;
-        tracing::info!("safety finished message sent");
         hike.phase = Phase::Finished;
         hike.finished_at = Some(at);
         hike.last_event_at = Some(at);
@@ -232,22 +236,26 @@ impl App {
         hike: &mut tracker::Model,
         event: Event,
         settings: &settings::Model,
+        now: DateTimeUtc,
     ) -> anyhow::Result<()> {
         if hike.phase != Phase::Active {
             self.start_hike(hike, &event).await?;
+            self.telegram.notify_ok(hike.phase).await?;
             tracing::info!("started a new hike");
         }
         if hike.safety_alerted {
-            tracing::info!("unrecognized alert ignored because safety already alerted");
+            tracing::info!("alert mail ignored because safety already alerted");
             return Ok(());
         }
-        self.telegram.notify_unrecognized(&event).await?;
-        tracing::info!("unrecognized mail safety alert sent");
+        self.telegram
+            .notify_alert(hike, settings, &event, now)
+            .await?;
+        tracing::info!("alert mail safety alert sent");
         hike.safety_alerted = true;
         // Preserve suppression of this interval's scheduled safety reminder.
         hike.safety_reminders_sent =
             i64::try_from(settings.safety_reminder_minutes.as_slice().len())?;
-        tracing::info!("unrecognized mail resulted in safety alert delivery");
+        tracing::info!("alert mail resulted in safety alert delivery");
         Ok(())
     }
 
@@ -304,7 +312,7 @@ impl App {
                     break;
                 }
                 self.telegram
-                    .notify_reminder(hike, audience, minutes)
+                    .notify_reminder(hike, settings, audience, minutes, now)
                     .await?;
                 match audience {
                     Audience::Owner => {

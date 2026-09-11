@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     config::Config,
-    state::{Event, RawMail, Signal, normalize},
+    state::{Event, IngressSource, RawMail, Signal, normalize},
 };
 
 pub(crate) struct ParsedMail {
@@ -49,7 +49,9 @@ pub(crate) fn parse(raw: RawMail, config: &Config) -> ParsedMail {
 
     ParsedMail {
         event: Event {
+            source: IngressSource::Mail,
             event_at,
+            received_at,
             location: extract_location(&body),
             body,
         },

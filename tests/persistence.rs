@@ -103,7 +103,7 @@ async fn settings_reply_failure_rolls_back_telegram_state_with_the_inbox_row() {
     );
 
     h.server.reset().await;
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&h.server)
         .await;
@@ -153,7 +153,7 @@ async fn later_send_failure_rolls_back_whole_tick_and_replays() {
     h.server.reset().await;
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 ResponseTemplate::new(500).set_body_json(
@@ -165,7 +165,7 @@ async fn later_send_failure_rolls_back_whole_tick_and_replays() {
         })
         .mount(&h.server)
         .await;
-    h.mail("unknown", "HELP", START).await; // start succeeds, safety fails
+    h.mail("alert-mail", "HELP", START).await; // start succeeds, safety fails
     assert!(h.app.tick(time(START)).await.is_err());
     assert_eq!(count.load(Ordering::SeqCst), 2); // no hidden retry
     assert_eq!(h.phase().await, Phase::Idle);
@@ -180,7 +180,7 @@ async fn later_send_failure_rolls_back_whole_tick_and_replays() {
     );
     assert_eq!(h.runtime().await.last_tick_at, None);
     reopen(&h).await.tick(time(START + 5000)).await.unwrap();
-    assert_eq!(count.load(Ordering::SeqCst), 4);
+    assert_eq!(count.load(Ordering::SeqCst), 5);
     assert_eq!(h.phase().await, Phase::Active);
     let sends = h.sends().await;
     assert_eq!(sends[0], sends[2]);
@@ -193,7 +193,7 @@ async fn later_event_failure_rolls_back_earlier_inbox_processing() {
     h.server.reset().await;
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 ResponseTemplate::new(500).set_body_json(
@@ -215,13 +215,12 @@ async fn later_event_failure_rolls_back_earlier_inbox_processing() {
     assert_eq!(h.runtime().await.last_tick_at, None);
 
     h.app.tick(time(START + 5000)).await.unwrap();
-    assert_eq!(count.load(Ordering::SeqCst), 6);
+    assert_eq!(count.load(Ordering::SeqCst), 5);
     assert_eq!(h.phase().await, Phase::Finished);
     assert_eq!(h.pending_inbox_count().await, 0);
     let sends = h.sends().await;
     assert_eq!(sends[0], sends[2]);
     assert_eq!(sends[4]["chat_id"], 10);
-    assert_eq!(sends[5]["chat_id"], 20);
 }
 
 #[tokio::test]
@@ -237,7 +236,7 @@ async fn reminder_failure_rolls_back_processed_inbox() {
     h.server.reset().await;
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
-    Mock::given(path("/bottest/sendMessage"))
+    Mock::given(path("/bottest/sendRichMessage"))
         .respond_with(move |_: &wiremock::Request| {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
                 ResponseTemplate::new(500).set_body_json(
@@ -309,7 +308,7 @@ async fn legacy_database_without_migration_history_is_reset() {
             .await
             .unwrap()
             .len(),
-        2
+        3
     );
     reopened.tick(time(START)).await.unwrap();
     assert_eq!(h.sends().await.len(), 2);
@@ -332,7 +331,7 @@ async fn unknown_migration_fails_without_resetting_data() {
     );
     assert_eq!(h.phase().await, Phase::Active);
     assert_eq!(h.inbox_count().await, 1);
-    assert_eq!(number(&h, "SELECT count(*) FROM seaql_migrations").await, 3);
+    assert_eq!(number(&h, "SELECT count(*) FROM seaql_migrations").await, 4);
 }
 
 #[tokio::test]
@@ -350,6 +349,6 @@ async fn empty_migration_history_applies_initial_migration() {
             .await
             .unwrap()
             .len(),
-        2
+        3
     );
 }

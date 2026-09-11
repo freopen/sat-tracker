@@ -29,6 +29,10 @@ pub enum SettingsPosition {
     OwnerReminderTimes,
     #[sea_orm(string_value = "safety_reminder_times")]
     SafetyReminderTimes,
+    #[sea_orm(string_value = "safety_alert_template")]
+    SafetyAlertTemplate,
+    #[sea_orm(string_value = "safety_recovery_template")]
+    SafetyRecoveryTemplate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
@@ -99,7 +103,9 @@ pub(crate) struct RawMail {
     pub received_at: DateTimeUtc,
 }
 pub(crate) struct Event {
+    pub source: IngressSource,
     pub event_at: DateTimeUtc,
+    pub received_at: DateTimeUtc,
     pub body: String,
     pub location: Option<String>,
 }
@@ -113,10 +119,6 @@ pub(crate) enum Signal {
 pub(crate) enum Audience {
     Owner,
     Safety,
-}
-
-pub(crate) fn format_time(time: DateTimeUtc) -> String {
-    time.to_rfc3339()
 }
 
 /// Keep the persisted clock precision stable while using chrono's rich type

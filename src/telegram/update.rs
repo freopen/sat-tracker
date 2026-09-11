@@ -1,7 +1,7 @@
 use crate::{
     entity::settings,
-    state::{DateTimeUtc, Event, Phase, ReminderMinutes, SettingsPosition, Signal},
-    telegram::{common, reply},
+    state::{DateTimeUtc, Event, IngressSource, Phase, ReminderMinutes, SettingsPosition, Signal},
+    telegram::{common, reply, template},
 };
 use anyhow::Context;
 use frankenstein::updates::{Update, UpdateContent};
@@ -17,6 +17,10 @@ pub(super) enum Command {
     Settings,
     OwnerReminderTimes,
     SafetyReminderTimes,
+    SafetyAlertTemplate,
+    SafetyRecoveryTemplate,
+    RenderedExamples,
+    Guide,
     Back,
 }
 
@@ -38,6 +42,21 @@ enum Decision {
         position: SettingsPosition,
         value: ReminderMinutes,
     },
+    SafetyTemplatePrompt {
+        source: String,
+    },
+    SafetyRecoveryTemplatePrompt {
+        source: String,
+    },
+    SafetyTemplateExamples,
+    SafetyRecoveryTemplateExamples,
+    SafetyTemplateGuide,
+    SafetyTemplateSubmitted {
+        source: String,
+    },
+    SafetyRecoveryTemplateSubmitted {
+        source: String,
+    },
     BackToSettings,
     BackToMain,
     SettingUpdated {
@@ -57,6 +76,7 @@ enum Decision {
 
 pub(super) async fn handle_update(
     client: &common::Client,
+    renderer: &template::Renderer,
     tx: &DatabaseTransaction,
     payload: &[u8],
     now: DateTimeUtc,
@@ -76,53 +96,151 @@ pub(super) async fn handle_update(
         }
         Decision::MainMenu => {
             common::set_position(tx, SettingsPosition::Main).await?;
-            reply::main_menu(client, phase).await?;
+            reply::main_menu(client, renderer, phase).await?;
             tracing::info!("Telegram start command handled");
         }
         Decision::Version => {
             common::set_position(tx, SettingsPosition::Main).await?;
-            reply::version(client, phase).await?;
+            reply::version(client, renderer, phase).await?;
             tracing::info!("Telegram version command handled");
         }
         Decision::SettingsMenu => {
             common::set_position(tx, SettingsPosition::Settings).await?;
-            reply::settings_menu(client).await?;
+            reply::settings_menu(client, renderer).await?;
         }
         Decision::SettingsUnavailable => {
             common::set_position(tx, SettingsPosition::Main).await?;
-            reply::settings_unavailable(client, phase).await?;
+            reply::settings_unavailable(client, renderer, phase).await?;
         }
         Decision::SettingPrompt { position, value } => {
             common::set_position(tx, position).await?;
-            reply::setting_prompt(client, position, &value).await?;
+            reply::setting_prompt(client, renderer, position, &value).await?;
+        }
+        Decision::SafetyTemplatePrompt { source } => {
+            common::set_position(tx, SettingsPosition::SafetyAlertTemplate).await?;
+            reply::safety_template_prompt(client, renderer, &source).await?;
+        }
+        Decision::SafetyRecoveryTemplatePrompt { source } => {
+            common::set_position(tx, SettingsPosition::SafetyRecoveryTemplate).await?;
+            reply::safety_recovery_template_prompt(client, renderer, &source).await?;
+        }
+        Decision::SafetyTemplateExamples => {
+            reply::safety_template_examples(client, renderer).await?;
+        }
+        Decision::SafetyRecoveryTemplateExamples => {
+            reply::safety_recovery_template_examples(client, renderer).await?;
+        }
+        Decision::SafetyTemplateGuide => {
+            reply::guide(client, renderer).await?;
         }
         Decision::BackToSettings => {
             common::set_position(tx, SettingsPosition::Settings).await?;
-            reply::settings_menu(client).await?;
+            reply::settings_menu(client, renderer).await?;
         }
         Decision::BackToMain => {
             common::set_position(tx, SettingsPosition::Main).await?;
-            reply::main_menu(client, phase).await?;
+            reply::main_menu(client, renderer, phase).await?;
         }
         Decision::SettingUpdated { position, value } => {
             common::set_reminder_minutes(tx, position, value.clone()).await?;
             common::set_position(tx, SettingsPosition::Settings).await?;
-            reply::setting_updated(client, position, &value).await?;
+            reply::setting_updated(client, renderer, position, &value).await?;
             tracing::info!(setting = setting_key(position), "Telegram setting updated");
         }
         Decision::SettingInvalid { position, current } => {
-            reply::setting_invalid(client, position, &current).await?;
+            reply::setting_invalid(client, renderer, position, &current).await?;
             tracing::info!(
                 setting = setting_key(position),
                 "invalid Telegram setting value"
             );
+        }
+        Decision::SafetyTemplateSubmitted { source } => {
+            match template::validate_safety_template(renderer, &source) {
+                Ok(()) => {
+                    // Send both samples before committing the replacement.
+                    // Ordinary transport failures roll back; a formatting or
+                    // length rejection is reported as an invalid template.
+                    match reply::safety_template_examples_for_source(client, renderer, &source)
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(error) if common::is_message_rejection(&error) => {
+                            reply::safety_template_invalid(
+                                client,
+                                renderer,
+                                &anyhow::anyhow!("template sample was rejected by Telegram"),
+                            )
+                            .await?;
+                            tracing::info!(
+                                reason = "template_sample_rejected",
+                                "invalid safety alert template"
+                            );
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    common::set_safety_alert_template(tx, source.clone()).await?;
+                    renderer.set_safety_alert_source(&source)?;
+                    common::set_position(tx, SettingsPosition::Settings).await?;
+                    reply::safety_template_updated(client, renderer).await?;
+                    tracing::info!("Telegram safety alert template updated");
+                }
+                Err(error) => {
+                    reply::safety_template_invalid(client, renderer, &error).await?;
+                    tracing::info!(
+                        reason = "template_validation_failed",
+                        "invalid safety alert template"
+                    );
+                }
+            }
+        }
+        Decision::SafetyRecoveryTemplateSubmitted { source } => {
+            match template::validate_safety_recovery_template(renderer, &source) {
+                Ok(()) => {
+                    match reply::safety_recovery_template_examples_for_source(
+                        client, renderer, &source,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(error) if common::is_message_rejection(&error) => {
+                            reply::safety_recovery_template_invalid(
+                                client,
+                                renderer,
+                                &anyhow::anyhow!("template sample was rejected by Telegram"),
+                            )
+                            .await?;
+                            tracing::info!(
+                                reason = "recovery_template_sample_rejected",
+                                "invalid safety recovery template"
+                            );
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    common::set_safety_recovery_template(tx, source.clone()).await?;
+                    renderer.set_safety_recovery_source(&source)?;
+                    common::set_position(tx, SettingsPosition::Settings).await?;
+                    reply::safety_recovery_template_updated(client, renderer).await?;
+                    tracing::info!("Telegram safety recovery template updated");
+                }
+                Err(error) => {
+                    reply::safety_recovery_template_invalid(client, renderer, &error).await?;
+                    tracing::info!(
+                        reason = "recovery_template_validation_failed",
+                        "invalid safety recovery template"
+                    );
+                }
+            }
         }
         Decision::Event { signal, date, body } => {
             common::set_position(tx, SettingsPosition::Main).await?;
             return Ok(Some((
                 signal,
                 Event {
+                    source: IngressSource::Telegram,
                     event_at: common::event_time(date, now),
+                    received_at: now,
                     body,
                     location: None,
                 },
@@ -183,13 +301,59 @@ fn decide(
                 .clone();
             Ok(Decision::SettingPrompt { position, value })
         }
+        Some(Command::SafetyAlertTemplate) => {
+            if inactive(phase) {
+                Ok(Decision::SafetyTemplatePrompt {
+                    source: settings.safety_alert_template.clone(),
+                })
+            } else {
+                Ok(Decision::SettingsUnavailable)
+            }
+        }
+        Some(Command::SafetyRecoveryTemplate) => {
+            if inactive(phase) {
+                Ok(Decision::SafetyRecoveryTemplatePrompt {
+                    source: settings.safety_recovery_template.clone(),
+                })
+            } else {
+                Ok(Decision::SettingsUnavailable)
+            }
+        }
+        Some(Command::RenderedExamples) => {
+            if inactive(phase) {
+                match position {
+                    SettingsPosition::SafetyAlertTemplate => Ok(Decision::SafetyTemplateExamples),
+                    SettingsPosition::SafetyRecoveryTemplate => {
+                        Ok(Decision::SafetyRecoveryTemplateExamples)
+                    }
+                    _ => Ok(Decision::Ignore),
+                }
+            } else {
+                Ok(Decision::Ignore)
+            }
+        }
+        Some(Command::Guide) => {
+            if inactive(phase)
+                && matches!(
+                    position,
+                    SettingsPosition::SafetyAlertTemplate
+                        | SettingsPosition::SafetyRecoveryTemplate
+                )
+            {
+                Ok(Decision::SafetyTemplateGuide)
+            } else {
+                Ok(Decision::Ignore)
+            }
+        }
         Some(Command::Back) => {
             if !inactive(phase) {
                 Ok(Decision::MainMenu)
             } else {
                 match position {
                     SettingsPosition::OwnerReminderTimes
-                    | SettingsPosition::SafetyReminderTimes => Ok(Decision::BackToSettings),
+                    | SettingsPosition::SafetyReminderTimes
+                    | SettingsPosition::SafetyAlertTemplate
+                    | SettingsPosition::SafetyRecoveryTemplate => Ok(Decision::BackToSettings),
                     SettingsPosition::Settings | SettingsPosition::Main => Ok(Decision::BackToMain),
                 }
             }
@@ -220,6 +384,14 @@ fn decide(
                         Err(_) => Ok(Decision::SettingInvalid { position, current }),
                     }
                 }
+                SettingsPosition::SafetyAlertTemplate => Ok(Decision::SafetyTemplateSubmitted {
+                    source: message.text.clone(),
+                }),
+                SettingsPosition::SafetyRecoveryTemplate => {
+                    Ok(Decision::SafetyRecoveryTemplateSubmitted {
+                        source: message.text.clone(),
+                    })
+                }
                 SettingsPosition::Main | SettingsPosition::Settings => Ok(Decision::Ignore),
             }
         }
@@ -238,6 +410,10 @@ pub(super) fn parse_command(text: &str) -> Option<Command> {
         "Settings" => return Some(Command::Settings),
         "Owner reminder times" => return Some(Command::OwnerReminderTimes),
         "Safety reminder times" => return Some(Command::SafetyReminderTimes),
+        "Safety alert template" => return Some(Command::SafetyAlertTemplate),
+        "Safety recovery template" => return Some(Command::SafetyRecoveryTemplate),
+        "Rendered examples" => return Some(Command::RenderedExamples),
+        "Guide" => return Some(Command::Guide),
         "Back" => return Some(Command::Back),
         _ => {}
     }
@@ -261,7 +437,10 @@ fn setting_value(
     match position {
         SettingsPosition::OwnerReminderTimes => Some(&settings.owner_reminder_minutes),
         SettingsPosition::SafetyReminderTimes => Some(&settings.safety_reminder_minutes),
-        SettingsPosition::Main | SettingsPosition::Settings => None,
+        SettingsPosition::Main
+        | SettingsPosition::Settings
+        | SettingsPosition::SafetyAlertTemplate
+        | SettingsPosition::SafetyRecoveryTemplate => None,
     }
 }
 
@@ -269,6 +448,8 @@ pub(super) fn setting_key(position: SettingsPosition) -> &'static str {
     match position {
         SettingsPosition::OwnerReminderTimes => "owner_reminder_minutes",
         SettingsPosition::SafetyReminderTimes => "safety_reminder_minutes",
+        SettingsPosition::SafetyAlertTemplate => "safety_alert_template",
+        SettingsPosition::SafetyRecoveryTemplate => "safety_recovery_template",
         SettingsPosition::Main | SettingsPosition::Settings => "none",
     }
 }
@@ -282,6 +463,8 @@ mod tests {
             id: 1,
             owner_reminder_minutes: ReminderMinutes(vec![30]),
             safety_reminder_minutes: ReminderMinutes(vec![60]),
+            safety_alert_template: template::DEFAULT_SAFETY_ALERT_TEMPLATE.to_owned(),
+            safety_recovery_template: template::DEFAULT_SAFETY_RECOVERY_TEMPLATE.to_owned(),
         }
     }
 

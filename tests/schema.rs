@@ -99,6 +99,12 @@ async fn settings_round_trip_as_json_and_keep_only_confirmed_values() {
     let initial = h.settings().await;
     assert_eq!(initial.owner_reminder_minutes.0, vec![30]);
     assert_eq!(initial.safety_reminder_minutes.0, vec![60]);
+    assert!(initial.safety_alert_template.contains("SAFETY ALERT"));
+    assert!(
+        initial
+            .safety_recovery_template
+            .contains("SAFETY CONTACT RESUMED")
+    );
 
     let mut model = initial.into_active_model();
     model.owner_reminder_minutes = Set(ReminderMinutes(vec![30, 45, 60]));

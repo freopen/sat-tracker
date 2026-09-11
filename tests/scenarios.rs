@@ -47,9 +47,8 @@ async fn lifecycle_deadlines_and_recovery() {
     h.mail("finish", "FINISHED", START + 62 * 60_000).await;
     assert_eq!(h.tick(START + 62 * 60_000).await, None);
     assert_eq!(h.phase().await, Phase::Finished);
-    assert_eq!(h.sends().await.len(), 9);
+    assert_eq!(h.sends().await.len(), 8);
     assert_eq!(h.sends().await[7]["chat_id"], 10);
-    assert_eq!(h.sends().await[8]["chat_id"], 20);
     assert_eq!(
         inbox::Entity::find()
             .filter(inbox::Column::Payload.is_not_null())
@@ -82,43 +81,44 @@ async fn stale_events_refresh_and_exact_cooldown() {
     h.mail("new", "OK", START + 2001 + 300_000).await;
     h.tick(START + 2001 + 300_000).await;
     assert_eq!(h.phase().await, Phase::Active);
-    assert_eq!(h.sends().await.len(), 8);
+    assert_eq!(h.sends().await.len(), 7);
 }
 
 #[tokio::test]
-async fn unrecognized_mail_alerts_suppresses_reminder_and_recovers() {
+async fn alert_mail_alerts_suppresses_reminder_and_recovers() {
     let h = Harness::new().await;
-    h.mail("unknown", "HELP", START).await;
+    h.mail("alert-mail", "HELP", START).await;
     h.tick(START).await;
     let sends = h.sends().await;
-    assert_eq!(sends.len(), 2);
+    assert_eq!(sends.len(), 3);
     assert_eq!(sends[0]["chat_id"], 10);
-    assert_eq!(sends[1]["chat_id"], 20);
-    h.mail("unknown-again", "HELP", START + 1000).await;
+    assert_eq!(sends[2]["chat_id"], 20);
+    h.mail("alert-mail-again", "HELP", START + 1000).await;
     h.tick(START + 60 * 60_000).await;
     let sends = h.sends().await;
-    assert_eq!(sends.len(), 3); // only owner reminder
-    assert_eq!(sends[2]["chat_id"], 10);
+    assert_eq!(sends.len(), 4); // only owner reminder after alert-start acknowledgement
+    assert_eq!(sends[2]["chat_id"], 20);
+    assert_eq!(sends[3]["chat_id"], 10);
+    assert_eq!(h.tracker().await.last_ok_at, Some(time(START)));
     h.mail("recovery", "OK", START + 61 * 60_000).await;
     h.tick(START + 61 * 60_000).await;
     let sends = h.sends().await;
-    assert_eq!(sends.len(), 6);
+    assert_eq!(sends.len(), 7);
     assert_eq!(sends[3]["chat_id"], 10);
-    assert_eq!(sends[4]["chat_id"], 20);
-    assert_eq!(sends[5]["chat_id"], 10);
-    assert!(
-        sends[3]["text"]
-            .as_str()
-            .unwrap()
-            .contains("contact resumed")
-    );
+    assert_eq!(sends[4]["chat_id"], 10);
+    assert_eq!(sends[5]["chat_id"], 20);
+    assert_eq!(sends[6]["chat_id"], 10);
     assert!(
         sends[4]["text"]
             .as_str()
             .unwrap()
             .contains("contact resumed")
     );
-    assert_eq!(sends[5]["text"], "OK received.");
+    assert_eq!(sends[6]["text"], "OK received.");
+    assert_eq!(
+        h.tracker().await.last_ok_at,
+        Some(time(START + 61 * 60_000))
+    );
     assert_eq!(h.tracker().await.safety_reminders_sent, 0);
     assert!(!h.tracker().await.owner_alerted);
     assert!(!h.tracker().await.safety_alerted);
@@ -198,14 +198,13 @@ async fn owner_reply_keyboard_tracks_state_and_silences_ok_acknowledgements() {
     h.tick(START + 2000).await;
     let sends = h.sends().await;
     assert_eq!(h.phase().await, Phase::Finished);
-    assert_eq!(sends.len(), 6);
+    assert_eq!(sends.len(), 5);
     assert_eq!(sends[4]["chat_id"], 10);
     assert_eq!(
         sends[4]["reply_markup"]["keyboard"],
         serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
     );
-    assert_eq!(sends[5]["chat_id"], 20);
-    assert!(sends[5].get("reply_markup").is_none());
+    assert!(sends[4].get("reply_markup").is_some());
 }
 
 #[tokio::test]
@@ -300,6 +299,98 @@ async fn owner_can_edit_both_reminder_schedules_while_inactive() {
     assert_eq!(
         h.sends().await[6]["reply_markup"]["keyboard"],
         serde_json::json!([[{"text": "Start hike"}, {"text": "Settings"}]])
+    );
+}
+
+#[tokio::test]
+async fn safety_alert_and_recovery_templates_keep_editor_state_and_validate_samples() {
+    let h = Harness::new().await;
+    for (id, text) in [(60, "Settings"), (61, "Safety alert template")] {
+        h.app
+            .accept_telegram(update(id, 10, START, text), time(START))
+            .await
+            .unwrap();
+    }
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::SafetyAlertTemplate
+    );
+    let old_alert = h.settings().await.safety_alert_template;
+
+    h.app
+        .accept_telegram(update(62, 10, START, "Rendered examples"), time(START))
+        .await
+        .unwrap();
+    h.app
+        .accept_telegram(update(63, 10, START, "Guide"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::SafetyAlertTemplate
+    );
+    let sends = h.sends().await;
+    assert_eq!(
+        sends
+            .iter()
+            .filter(|send| {
+                send["chat_id"] == 10
+                    && send["text"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("Telegram message template Guide")
+            })
+            .count(),
+        1
+    );
+
+    h.app
+        .accept_telegram(update(64, 10, START, "{{ missing }}"), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.settings().await.safety_alert_template, old_alert);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::SafetyAlertTemplate
+    );
+
+    let replacement = "**{{ alert.reason }}**";
+    h.app
+        .accept_telegram(update(65, 10, START, replacement), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.settings().await.safety_alert_template, replacement);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
+    );
+
+    h.app
+        .accept_telegram(
+            update(66, 10, START, "Safety recovery template"),
+            time(START),
+        )
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::SafetyRecoveryTemplate
+    );
+    let recovery = "**recovered {{ alert.at | time(format=\"t\") }}**";
+    h.app
+        .accept_telegram(update(67, 10, START, recovery), time(START))
+        .await
+        .unwrap();
+    h.tick(START).await;
+    assert_eq!(h.settings().await.safety_recovery_template, recovery);
+    assert_eq!(
+        h.runtime().await.settings_position,
+        SettingsPosition::Settings
     );
 }
 
@@ -413,19 +504,88 @@ async fn persisted_reminder_schedules_drive_deadlines() {
 }
 
 #[tokio::test]
-async fn unrecognized_alert_suppresses_all_configured_safety_reminders() {
+async fn alert_mail_suppresses_all_configured_safety_reminders() {
     let h = Harness::new().await;
     let mut settings = h.settings().await.into_active_model();
     settings.owner_reminder_minutes = Set(ReminderMinutes(vec![30]));
     settings.safety_reminder_minutes = Set(ReminderMinutes(vec![5, 10, 15]));
     settings.update(&h.db).await.unwrap();
 
-    h.mail("unknown", "HELP", START).await;
+    h.mail("alert-mail", "HELP", START).await;
     h.tick(START).await;
     assert_eq!(h.tracker().await.safety_reminders_sent, 3);
     h.tick(START + 15 * 60_000).await;
-    assert_eq!(h.sends().await.len(), 2);
+    assert_eq!(h.sends().await.len(), 3);
     assert_eq!(h.tracker().await.safety_reminders_sent, 3);
+}
+
+#[tokio::test]
+async fn safety_recovery_uses_its_template_after_a_safety_alert() {
+    let h = Harness::new().await;
+    let mut settings = h.settings().await.into_active_model();
+    settings.safety_recovery_template = Set("{{ alert.reason }} {{ mail.body }}".to_owned());
+    settings.update(&h.db).await.unwrap();
+
+    h.mail("start", "OK", START).await;
+    h.tick(START).await;
+    h.tick(START + 60 * 60_000).await;
+    h.mail("recovery", "OK", START + 61 * 60_000).await;
+    h.tick(START + 61 * 60_000).await;
+
+    let sends = h.sends().await;
+    let safety_recovery = sends
+        .iter()
+        .find(|send| {
+            send["chat_id"] == 20
+                && send["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("recovery OK")
+        })
+        .expect("safety recovery message");
+    assert!(
+        safety_recovery["rich_message"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("recovery OK")
+    );
+}
+
+#[tokio::test]
+async fn rejected_alert_rich_markdown_uses_bounded_safety_fallback_and_notifies_owner() {
+    let h = Harness::new().await;
+    let mut settings = h.settings().await.into_active_model();
+    settings.safety_alert_template = Set("bad *".to_owned());
+    settings.update(&h.db).await.unwrap();
+
+    h.server.reset().await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    wiremock::Mock::given(wiremock::matchers::path("/bottest/sendRichMessage"))
+        .respond_with(move |_: &wiremock::Request| {
+            if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+                wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "ok": false,
+                    "error_code": 400,
+                    "description": "Bad Request: can't parse entities"
+                }))
+            } else {
+                success()
+            }
+        })
+        .mount(&h.server)
+        .await;
+
+    h.mail("bad-markdown", "HELP", START).await;
+    h.tick(START).await.unwrap();
+    let sends = h.sends().await;
+    assert_eq!(sends.len(), 5);
+    assert_eq!(sends[2]["chat_id"], 20);
+    assert_eq!(sends[3]["chat_id"], 20);
+    assert!(sends[3]["text"].as_str().unwrap().contains("alert mail"));
+    assert_eq!(sends[4]["chat_id"], 10);
+    assert!(sends[4]["text"].as_str().unwrap().contains("built"));
+    assert!(h.tracker().await.safety_alerted);
 }
 
 #[tokio::test]
@@ -498,9 +658,9 @@ async fn owner_commands_and_version_are_handled() {
         .unwrap();
     h.tick(START + 1000).await;
     assert_eq!(h.phase().await, Phase::Finished);
-    assert_eq!(h.sends().await.len(), 6);
+    assert_eq!(h.sends().await.len(), 5);
     assert_eq!(h.sends().await[4]["chat_id"], 10);
-    assert_eq!(h.sends().await[5]["chat_id"], 20);
+    assert!(h.sends().await[4]["reply_markup"].is_object());
 }
 
 #[tokio::test]
@@ -569,7 +729,7 @@ async fn mail_without_id_is_retained_as_separate_events() {
 }
 
 #[tokio::test]
-async fn messages_within_limit_are_sent_in_one_request() {
+async fn rich_messages_allow_more_than_the_legacy_text_limit() {
     let h = Harness::new().await;
     let text = "x".repeat(4000);
     h.app
@@ -578,8 +738,12 @@ async fn messages_within_limit_are_sent_in_one_request() {
         .unwrap();
     h.tick(START).await;
     let sends = h.sends().await;
-    assert_eq!(sends.len(), 2); // start and one safety alert
-    assert!(sends[1]["text"].as_str().unwrap().ends_with(&text));
+    assert_eq!(sends.len(), 3); // start, silent OK, and one rich safety alert
+    let rendered = sends[2]["rich_message"]["markdown"]
+        .as_str()
+        .expect("rich Markdown payload");
+    assert!(rendered.len() > 4096);
+    assert!(rendered.chars().count() <= 32_768);
 }
 
 #[tokio::test]
@@ -618,7 +782,6 @@ async fn pending_finished_event_precedes_overdue_reminders() {
     h.mail("finish", "FINISHED", START + 60 * 60_000).await;
     h.tick(START + 60 * 60_000).await;
     assert_eq!(h.phase().await, Phase::Finished);
-    assert_eq!(h.sends().await.len(), 4);
+    assert_eq!(h.sends().await.len(), 3);
     assert_eq!(h.sends().await[2]["chat_id"], 10);
-    assert_eq!(h.sends().await[3]["chat_id"], 20);
 }

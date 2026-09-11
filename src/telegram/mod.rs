@@ -1,6 +1,7 @@
 mod common;
 mod lifecycle;
 mod reply;
+mod template;
 mod update;
 
 use crate::{
@@ -13,13 +14,31 @@ use std::sync::Arc;
 
 pub(crate) struct Telegram {
     client: common::Client,
+    templates: template::Renderer,
 }
 
 impl Telegram {
-    pub(crate) fn new(config: &Config) -> anyhow::Result<Self> {
+    pub(crate) fn new(
+        config: &Config,
+        settings: &crate::entity::settings::Model,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             client: lifecycle::new_client(config)?,
+            templates: template::Renderer::new(
+                &settings.safety_alert_template,
+                &settings.safety_recovery_template,
+            )?,
         })
+    }
+
+    pub(crate) fn sync_templates(
+        &self,
+        settings: &crate::entity::settings::Model,
+    ) -> anyhow::Result<()> {
+        self.templates.sync_sources(
+            &settings.safety_alert_template,
+            &settings.safety_recovery_template,
+        )
     }
 
     pub(crate) async fn configure(&self, url: &str) -> anyhow::Result<()> {
@@ -51,44 +70,64 @@ impl Telegram {
         now: DateTimeUtc,
         phase: Phase,
     ) -> anyhow::Result<Option<(Signal, Event)>> {
-        update::handle_update(&self.client, tx, payload, now, phase).await
+        update::handle_update(&self.client, &self.templates, tx, payload, now, phase).await
     }
 
     pub(crate) async fn notify_started(&self, event: &Event) -> anyhow::Result<()> {
-        reply::notify_started(&self.client, event).await
+        reply::notify_started(&self.client, &self.templates, event).await
     }
 
     pub(crate) async fn notify_ok(&self, phase: Phase) -> anyhow::Result<()> {
-        reply::notify_ok(&self.client, phase).await
+        reply::notify_ok(&self.client, &self.templates, phase).await
     }
 
-    pub(crate) async fn notify_recovery(
+    pub(crate) async fn notify_recovery(&self, event: &Event) -> anyhow::Result<()> {
+        reply::notify_recovery(&self.client, &self.templates, event).await
+    }
+
+    pub(crate) async fn notify_safety_recovery(
         &self,
-        audience: Audience,
+        hike: &crate::entity::tracker::Model,
+        settings: &crate::entity::settings::Model,
         event: &Event,
+        at: DateTimeUtc,
     ) -> anyhow::Result<()> {
-        reply::notify_recovery(&self.client, audience, event).await
+        reply::notify_safety_recovery(&self.client, &self.templates, hike, settings, event, at)
+            .await
     }
 
-    pub(crate) async fn notify_finished(
+    pub(crate) async fn notify_finished(&self, event: &Event) -> anyhow::Result<()> {
+        reply::notify_finished(&self.client, &self.templates, event).await
+    }
+
+    pub(crate) async fn notify_alert(
         &self,
-        audience: Audience,
+        hike: &crate::entity::tracker::Model,
+        settings: &crate::entity::settings::Model,
         event: &Event,
+        at: DateTimeUtc,
     ) -> anyhow::Result<()> {
-        reply::notify_finished(&self.client, audience, event).await
-    }
-
-    pub(crate) async fn notify_unrecognized(&self, event: &Event) -> anyhow::Result<()> {
-        reply::notify_unrecognized(&self.client, event).await
+        reply::notify_alert(&self.client, &self.templates, hike, settings, event, at).await
     }
 
     pub(crate) async fn notify_reminder(
         &self,
         hike: &crate::entity::tracker::Model,
+        settings: &crate::entity::settings::Model,
         audience: Audience,
         minutes: i64,
+        at: DateTimeUtc,
     ) -> anyhow::Result<()> {
-        reply::notify_reminder(&self.client, hike, audience, minutes).await
+        reply::notify_reminder(
+            &self.client,
+            &self.templates,
+            hike,
+            settings,
+            audience,
+            minutes,
+            at,
+        )
+        .await
     }
 }
 

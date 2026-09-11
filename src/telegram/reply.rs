@@ -1,13 +1,19 @@
 use crate::{
-    entity::tracker,
-    state::{Audience, Event, Phase, ReminderMinutes, SettingsPosition, format_time},
-    telegram::common::Client,
+    entity::{settings, tracker},
+    state::{Audience, DateTimeUtc, Event, Phase, ReminderMinutes, SettingsPosition},
+    telegram::{
+        common::{self, Client},
+        template,
+    },
 };
 use frankenstein::{
     AsyncTelegramApi,
-    methods::SendMessageParams,
+    methods::SendRichMessageParams,
+    rich_message::InputRichMessage,
     types::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup},
 };
+use serde::Serialize;
+use serde_json::json;
 
 pub(super) async fn send(client: &Client, audience: Audience, text: &str) -> anyhow::Result<()> {
     let chat_id = match audience {
@@ -16,10 +22,10 @@ pub(super) async fn send(client: &Client, audience: Audience, text: &str) -> any
     };
     client
         .bot
-        .send_message(
-            &SendMessageParams::builder()
+        .send_rich_message(
+            &SendRichMessageParams::builder()
                 .chat_id(chat_id)
-                .text(text)
+                .rich_message(InputRichMessage::builder().markdown(text).build())
                 .build(),
         )
         .await?;
@@ -43,10 +49,10 @@ async fn send_owner_with_keyboard(
 ) -> anyhow::Result<()> {
     client
         .bot
-        .send_message(
-            &SendMessageParams::builder()
+        .send_rich_message(
+            &SendRichMessageParams::builder()
                 .chat_id(client.owner_chat_id)
-                .text(text)
+                .rich_message(InputRichMessage::builder().markdown(text).build())
                 .disable_notification(disable_notification)
                 .reply_markup(keyboard)
                 .build(),
@@ -55,22 +61,74 @@ async fn send_owner_with_keyboard(
     Ok(())
 }
 
-pub(super) async fn main_menu(client: &Client, phase: Phase) -> anyhow::Result<()> {
-    send_owner(client, "Choose an action.", phase, false).await
+async fn send_owner_template<S: Serialize>(
+    client: &Client,
+    renderer: &template::Renderer,
+    id: template::TemplateId,
+    context: &S,
+    phase: Phase,
+    disable_notification: bool,
+) -> anyhow::Result<()> {
+    let text = renderer.render(id, context)?;
+    send_owner(client, &text, phase, disable_notification).await
 }
 
-pub(super) async fn version(client: &Client, phase: Phase) -> anyhow::Result<()> {
-    send_owner(client, &crate::build_info().message(), phase, false).await
-}
-
-pub(super) async fn settings_menu(client: &Client) -> anyhow::Result<()> {
-    send_owner_with_keyboard(client, "Choose a setting.", settings_keyboard(), false).await
-}
-
-pub(super) async fn settings_unavailable(client: &Client, phase: Phase) -> anyhow::Result<()> {
-    send_owner(
+pub(super) async fn main_menu(
+    client: &Client,
+    renderer: &template::Renderer,
+    phase: Phase,
+) -> anyhow::Result<()> {
+    send_owner_template(
         client,
-        "Settings are unavailable while a hike is active.",
+        renderer,
+        template::TemplateId::OwnerMainMenu,
+        &json!({}),
+        phase,
+        false,
+    )
+    .await
+}
+
+pub(super) async fn version(
+    client: &Client,
+    renderer: &template::Renderer,
+    phase: Phase,
+) -> anyhow::Result<()> {
+    let info = crate::build_info();
+    send_owner_template(
+        client,
+        renderer,
+        template::TemplateId::OwnerVersion,
+        &json!({
+            "version": info.version,
+            "build_time": info.build_time,
+            "git_commit": info.git_commit,
+            "git_dirty": info.git_dirty,
+        }),
+        phase,
+        false,
+    )
+    .await
+}
+
+pub(super) async fn settings_menu(
+    client: &Client,
+    renderer: &template::Renderer,
+) -> anyhow::Result<()> {
+    let text = renderer.render(template::TemplateId::OwnerSettingsMenu, &json!({}))?;
+    send_owner_with_keyboard(client, &text, settings_keyboard(), false).await
+}
+
+pub(super) async fn settings_unavailable(
+    client: &Client,
+    renderer: &template::Renderer,
+    phase: Phase,
+) -> anyhow::Result<()> {
+    send_owner_template(
+        client,
+        renderer,
+        template::TemplateId::OwnerSettingsUnavailable,
+        &json!({}),
         phase,
         false,
     )
@@ -79,96 +137,413 @@ pub(super) async fn settings_unavailable(client: &Client, phase: Phase) -> anyho
 
 pub(super) async fn setting_prompt(
     client: &Client,
+    renderer: &template::Renderer,
     position: SettingsPosition,
-    value: &crate::state::ReminderMinutes,
+    value: &ReminderMinutes,
 ) -> anyhow::Result<()> {
-    send_owner_with_keyboard(
-        client,
-        &setting_prompt_text(position, value),
-        setting_prompt_keyboard(),
-        false,
-    )
-    .await
+    let text = renderer.render(
+        template::TemplateId::SettingPrompt,
+        &json!({"label": setting_label(position), "value": value.to_string()}),
+    )?;
+    send_owner_with_keyboard(client, &text, setting_prompt_keyboard(), false).await
 }
 
 pub(super) async fn setting_updated(
     client: &Client,
+    renderer: &template::Renderer,
     position: SettingsPosition,
-    value: &crate::state::ReminderMinutes,
+    value: &ReminderMinutes,
 ) -> anyhow::Result<()> {
-    send_owner_with_keyboard(
-        client,
-        &format!("{} updated to {}.", setting_label(position), value),
-        settings_keyboard(),
-        false,
-    )
-    .await
+    let text = renderer.render(
+        template::TemplateId::SettingUpdated,
+        &json!({"label": setting_label(position), "value": value.to_string()}),
+    )?;
+    send_owner_with_keyboard(client, &text, settings_keyboard(), false).await
 }
 
 pub(super) async fn setting_invalid(
     client: &Client,
+    renderer: &template::Renderer,
     position: SettingsPosition,
-    current: &crate::state::ReminderMinutes,
+    current: &ReminderMinutes,
 ) -> anyhow::Result<()> {
-    send_owner_with_keyboard(
+    let text = renderer.render(
+        template::TemplateId::SettingInvalid,
+        &json!({"label": setting_label(position), "value": current.to_string()}),
+    )?;
+    send_owner_with_keyboard(client, &text, setting_prompt_keyboard(), false).await
+}
+
+pub(super) async fn safety_template_prompt(
+    client: &Client,
+    renderer: &template::Renderer,
+    source: &str,
+) -> anyhow::Result<()> {
+    safety_template_prompt_for(client, renderer, "Safety alert template", source).await
+}
+
+pub(super) async fn safety_recovery_template_prompt(
+    client: &Client,
+    renderer: &template::Renderer,
+    source: &str,
+) -> anyhow::Result<()> {
+    safety_template_prompt_for(client, renderer, "Safety recovery template", source).await
+}
+
+async fn safety_template_prompt_for(
+    client: &Client,
+    renderer: &template::Renderer,
+    label: &str,
+    source: &str,
+) -> anyhow::Result<()> {
+    let text = renderer.render(
+        template::TemplateId::SafetyTemplatePrompt,
+        &json!({"label": label, "source": source}),
+    )?;
+    send_owner_with_keyboard(client, &text, safety_template_keyboard(), false).await
+}
+
+pub(super) async fn safety_template_invalid(
+    client: &Client,
+    renderer: &template::Renderer,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    safety_template_invalid_for(client, renderer, "Safety alert template", error).await
+}
+
+pub(super) async fn safety_recovery_template_invalid(
+    client: &Client,
+    renderer: &template::Renderer,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    safety_template_invalid_for(client, renderer, "Safety recovery template", error).await
+}
+
+async fn safety_template_invalid_for(
+    client: &Client,
+    renderer: &template::Renderer,
+    label: &str,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    let text = renderer.render(
+        template::TemplateId::SafetyTemplateInvalid,
+        &json!({"label": label, "error": concise_error(error)}),
+    )?;
+    send_owner_with_keyboard(client, &text, safety_template_keyboard(), false).await
+}
+
+pub(super) async fn safety_template_updated(
+    client: &Client,
+    renderer: &template::Renderer,
+) -> anyhow::Result<()> {
+    safety_template_updated_for(client, renderer, "Safety alert template").await
+}
+
+async fn safety_template_updated_for(
+    client: &Client,
+    renderer: &template::Renderer,
+    label: &str,
+) -> anyhow::Result<()> {
+    let text = renderer.render(
+        template::TemplateId::SafetyTemplateUpdated,
+        &json!({"label": label}),
+    )?;
+    send_owner_with_keyboard(client, &text, settings_keyboard(), false).await
+}
+
+pub(super) async fn safety_template_examples(
+    client: &Client,
+    renderer: &template::Renderer,
+) -> anyhow::Result<()> {
+    let (mail, overdue) = renderer.example_alerts()?;
+    send_owner_with_keyboard(client, &mail, safety_template_keyboard(), false).await?;
+    send_owner_with_keyboard(client, &overdue, safety_template_keyboard(), false).await
+}
+
+pub(super) async fn safety_template_examples_for_source(
+    client: &Client,
+    renderer: &template::Renderer,
+    source: &str,
+) -> anyhow::Result<()> {
+    let candidate = renderer.candidate_safety_alert(source)?;
+    safety_template_examples(client, &candidate).await
+}
+
+pub(super) async fn safety_recovery_template_examples(
+    client: &Client,
+    renderer: &template::Renderer,
+) -> anyhow::Result<()> {
+    let recovery = renderer.example_recovery()?;
+    send_owner_with_keyboard(client, &recovery, safety_template_keyboard(), false).await
+}
+
+pub(super) async fn safety_recovery_template_examples_for_source(
+    client: &Client,
+    renderer: &template::Renderer,
+    source: &str,
+) -> anyhow::Result<()> {
+    let candidate = renderer.candidate_safety_recovery(source)?;
+    safety_recovery_template_examples(client, &candidate).await
+}
+
+pub(super) async fn safety_recovery_template_updated(
+    client: &Client,
+    renderer: &template::Renderer,
+) -> anyhow::Result<()> {
+    safety_template_updated_for(client, renderer, "Safety recovery template").await
+}
+
+pub(super) async fn guide(client: &Client, renderer: &template::Renderer) -> anyhow::Result<()> {
+    let guide = renderer.guide()?;
+    send_owner_with_keyboard(client, &guide, safety_template_keyboard(), false).await
+}
+
+pub(super) async fn notify_started(
+    client: &Client,
+    renderer: &template::Renderer,
+    _event: &Event,
+) -> anyhow::Result<()> {
+    send_owner_template(
         client,
-        &format!(
-            "Invalid reminder times.\n\n{}",
-            setting_prompt_text(position, current)
-        ),
-        setting_prompt_keyboard(),
+        renderer,
+        template::TemplateId::OwnerStarted,
+        &json!({}),
+        Phase::Active,
         false,
     )
     .await
 }
 
-pub(super) async fn notify_started(client: &Client, event: &Event) -> anyhow::Result<()> {
-    send_owner(client, &started(event), Phase::Active, false).await
-}
-
-pub(super) async fn notify_ok(client: &Client, phase: Phase) -> anyhow::Result<()> {
-    send_owner(client, "OK received.", phase, true).await
+pub(super) async fn notify_ok(
+    client: &Client,
+    renderer: &template::Renderer,
+    phase: Phase,
+) -> anyhow::Result<()> {
+    send_owner_template(
+        client,
+        renderer,
+        template::TemplateId::OwnerOk,
+        &json!({}),
+        phase,
+        true,
+    )
+    .await
 }
 
 pub(super) async fn notify_recovery(
     client: &Client,
-    audience: Audience,
+    renderer: &template::Renderer,
     event: &Event,
 ) -> anyhow::Result<()> {
-    let text = recovery(event);
-    match audience {
-        Audience::Owner => send_owner(client, &text, Phase::Active, false).await,
-        Audience::Safety => send(client, Audience::Safety, &text).await,
+    send_owner_template(
+        client,
+        renderer,
+        template::TemplateId::OwnerRecovery,
+        &json!({"event_at": event.event_at.timestamp()}),
+        Phase::Active,
+        false,
+    )
+    .await
+}
+
+pub(super) async fn notify_safety_recovery(
+    client: &Client,
+    renderer: &template::Renderer,
+    hike: &tracker::Model,
+    settings: &settings::Model,
+    event: &Event,
+    at: DateTimeUtc,
+) -> anyhow::Result<()> {
+    let rendered = renderer.render_recovery(hike, settings, event, at);
+    let (text, render_failed) = match rendered {
+        Ok(text) => (text, false),
+        Err(error) => {
+            tracing::warn!(
+                reason = "recovery_template_render_failed",
+                kind = %error,
+                "using built-in safety recovery"
+            );
+            (fallback_recovery(at), true)
+        }
+    };
+    let transport_fallback = match send(client, Audience::Safety, &text).await {
+        Ok(()) => false,
+        Err(error) if common::is_message_rejection(&error) => {
+            tracing::warn!(
+                reason = "recovery_template_message_rejected",
+                "using built-in safety recovery"
+            );
+            send(client, Audience::Safety, &fallback_recovery(at)).await?;
+            true
+        }
+        Err(error) => return Err(error),
+    };
+    if render_failed || transport_fallback {
+        send_owner_template(
+            client,
+            renderer,
+            template::TemplateId::OwnerFallback,
+            &json!({}),
+            Phase::Active,
+            false,
+        )
+        .await?;
     }
+    Ok(())
 }
 
 pub(super) async fn notify_finished(
     client: &Client,
-    audience: Audience,
-    event: &Event,
+    renderer: &template::Renderer,
+    _event: &Event,
 ) -> anyhow::Result<()> {
-    let text = finished(event);
-    match audience {
-        Audience::Owner => send_owner(client, &text, Phase::Finished, false).await,
-        Audience::Safety => send(client, Audience::Safety, &text).await,
-    }
+    send_owner_template(
+        client,
+        renderer,
+        template::TemplateId::OwnerFinished,
+        &json!({}),
+        Phase::Finished,
+        false,
+    )
+    .await
 }
 
-pub(super) async fn notify_unrecognized(client: &Client, event: &Event) -> anyhow::Result<()> {
-    send(client, Audience::Safety, &unrecognized(event)).await
+pub(super) async fn notify_alert(
+    client: &Client,
+    renderer: &template::Renderer,
+    hike: &tracker::Model,
+    settings: &settings::Model,
+    event: &Event,
+    at: DateTimeUtc,
+) -> anyhow::Result<()> {
+    let rendered = renderer.render_alert(hike, settings, Some(event), "alert_mail", at, None);
+    let (text, render_failed) = match rendered {
+        Ok(text) => (text, false),
+        Err(error) => {
+            tracing::warn!(reason = "template_render_failed", kind = %error, "using built-in safety alert");
+            (fallback_alert(event, at), true)
+        }
+    };
+    let transport_fallback = match send(client, Audience::Safety, &text).await {
+        Ok(()) => false,
+        Err(error) if common::is_message_rejection(&error) => {
+            tracing::warn!(
+                reason = "template_message_rejected",
+                "using built-in safety alert"
+            );
+            send(client, Audience::Safety, &fallback_alert(event, at)).await?;
+            true
+        }
+        Err(error) => return Err(error),
+    };
+    if render_failed || transport_fallback {
+        send_owner_template(
+            client,
+            renderer,
+            template::TemplateId::OwnerFallback,
+            &json!({}),
+            Phase::Active,
+            false,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub(super) async fn notify_reminder(
     client: &Client,
+    renderer: &template::Renderer,
     hike: &tracker::Model,
+    settings: &settings::Model,
     audience: Audience,
     minutes: i64,
+    at: DateTimeUtc,
 ) -> anyhow::Result<()> {
-    let text = reminder(hike, audience, minutes);
     match audience {
-        Audience::Owner => send_owner(client, &text, Phase::Active, false).await,
-        Audience::Safety => send(client, Audience::Safety, &text).await,
+        Audience::Owner => {
+            let text = renderer.render(
+                template::TemplateId::OwnerReminder,
+                &json!({"minutes": minutes}),
+            )?;
+            send_owner(client, &text, Phase::Active, false).await
+        }
+        Audience::Safety => {
+            let text = renderer.render_alert(hike, settings, None, "overdue", at, Some(minutes));
+            match text {
+                Ok(text) => match send(client, Audience::Safety, &text).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if common::is_message_rejection(&error) => {
+                        tracing::warn!(
+                            reason = "template_message_rejected",
+                            "using built-in overdue safety alert"
+                        );
+                        send(client, Audience::Safety, &fallback_overdue(hike, minutes)).await?;
+                        send_owner_template(
+                            client,
+                            renderer,
+                            template::TemplateId::OwnerFallback,
+                            &json!({}),
+                            Phase::Active,
+                            false,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
+                Err(error) => {
+                    tracing::warn!(reason = "template_render_failed", kind = %error, "using built-in overdue safety alert");
+                    send(client, Audience::Safety, &fallback_overdue(hike, minutes)).await?;
+                    send_owner_template(
+                        client,
+                        renderer,
+                        template::TemplateId::OwnerFallback,
+                        &json!({}),
+                        Phase::Active,
+                        false,
+                    )
+                    .await
+                }
+            }
+        }
     }
+}
+
+fn fallback_alert(event: &Event, at: DateTimeUtc) -> String {
+    let prefix = format!("**SAFETY ALERT: alert mail**\nAt: {}\n\n", time_entity(at));
+    bounded_message(&prefix, &template::markdown_escape(&event.body))
+}
+
+fn fallback_overdue(hike: &tracker::Model, minutes: i64) -> String {
+    let base = hike
+        .last_ok_at
+        .map(time_entity)
+        .unwrap_or_else(|| "unknown".to_owned());
+    let minutes = template::markdown_escape(&minutes.to_string());
+    format!("**SAFETY ALERT: overdue**\nNo OK for {minutes} minutes.\nLast contact: {base}")
+}
+
+fn fallback_recovery(at: DateTimeUtc) -> String {
+    format!("**SAFETY CONTACT RESUMED**\nAt: {}", time_entity(at))
+}
+
+fn bounded_message(prefix: &str, body: &str) -> String {
+    let available = template::MAX_MESSAGE_CHARS.saturating_sub(prefix.chars().count());
+    let mut body = body.to_owned();
+    if body.chars().count() > available {
+        body = body.chars().take(available).collect();
+        while body.ends_with('\\') {
+            body.pop();
+        }
+    }
+    format!("{prefix}{body}")
+}
+
+fn time_entity(value: DateTimeUtc) -> String {
+    format!(
+        "![{}](tg://time?unix={}&format=wDT)",
+        template::markdown_escape(&value.to_rfc3339()),
+        value.timestamp()
+    )
 }
 
 fn owner_keyboard(phase: Phase) -> ReplyMarkup {
@@ -183,12 +558,18 @@ fn settings_keyboard() -> ReplyMarkup {
     reply_keyboard(vec![
         vec!["Owner reminder times"],
         vec!["Safety reminder times"],
+        vec!["Safety alert template"],
+        vec!["Safety recovery template"],
         vec!["Back"],
     ])
 }
 
 fn setting_prompt_keyboard() -> ReplyMarkup {
     reply_keyboard(vec![vec!["Back"]])
+}
+
+fn safety_template_keyboard() -> ReplyMarkup {
+    reply_keyboard(vec![vec!["Rendered examples", "Guide"], vec!["Back"]])
 }
 
 fn reply_keyboard(rows: Vec<Vec<&'static str>>) -> ReplyMarkup {
@@ -209,72 +590,26 @@ fn reply_keyboard(rows: Vec<Vec<&'static str>>) -> ReplyMarkup {
     )
 }
 
-fn location(value: Option<&str>) -> String {
-    value.map(|s| format!("\n{s}")).unwrap_or_default()
-}
-
-fn started(event: &Event) -> String {
-    format!(
-        "InReach hike started at {}.{}",
-        format_time(event.event_at),
-        location(event.location.as_deref())
-    )
-}
-
-fn recovery(event: &Event) -> String {
-    format!(
-        "InReach contact resumed at {}.{}",
-        format_time(event.event_at),
-        location(event.location.as_deref())
-    )
-}
-
-fn finished(event: &Event) -> String {
-    format!(
-        "InReach hike FINISHED at {}.{}\n\n{}",
-        format_time(event.event_at),
-        location(event.location.as_deref()),
-        event.body
-    )
-}
-
-fn unrecognized(event: &Event) -> String {
-    format!(
-        "SAFETY ALERT: unrecognized InReach message\nEvent time: {}\n\n{}",
-        format_time(event.event_at),
-        event.body
-    )
-}
-
-fn reminder(hike: &tracker::Model, audience: Audience, minutes: i64) -> String {
-    let prefix = match audience {
-        Audience::Owner => "No InReach OK",
-        Audience::Safety => "SAFETY ALERT: no InReach OK",
-    };
-    format!(
-        "{prefix} for {minutes} minutes. Last contact: {}.{}\n\n{}",
-        format_time(hike.last_ok_at.expect("active hike has last OK")),
-        location(hike.location.as_deref()),
-        hike.last_body.as_deref().unwrap_or_default()
-    )
-}
-
 fn setting_label(position: SettingsPosition) -> &'static str {
     match position {
         SettingsPosition::OwnerReminderTimes => "Owner reminder times",
         SettingsPosition::SafetyReminderTimes => "Safety reminder times",
-        SettingsPosition::Main | SettingsPosition::Settings => {
+        SettingsPosition::Main
+        | SettingsPosition::Settings
+        | SettingsPosition::SafetyAlertTemplate
+        | SettingsPosition::SafetyRecoveryTemplate => {
             unreachable!("settings position does not select a reminder schedule")
         }
     }
 }
 
-fn setting_prompt_text(position: SettingsPosition, value: &ReminderMinutes) -> String {
-    format!(
-        "{} are currently {}.\nType a new comma-separated list of positive, strictly increasing minutes (for example, 30, 45, 60).",
-        setting_label(position),
-        value,
-    )
+fn concise_error(error: &anyhow::Error) -> String {
+    error
+        .to_string()
+        .split(':')
+        .next()
+        .unwrap_or("template validation failed")
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -283,32 +618,29 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn owner_keyboard_serializes_phase_specific_one_time_buttons() {
-        let inactive = serde_json::to_value(owner_keyboard(Phase::Finished)).unwrap();
+    fn settings_keyboard_contains_the_template_editor() {
+        let value = serde_json::to_value(settings_keyboard()).unwrap();
         assert_eq!(
-            inactive["keyboard"],
-            json!([[{"text": "Start hike"}, {"text": "Settings"}]])
-        );
-        assert_eq!(inactive["is_persistent"], true);
-        assert_eq!(inactive["resize_keyboard"], true);
-
-        let active = serde_json::to_value(owner_keyboard(Phase::Active)).unwrap();
-        assert_eq!(
-            active["keyboard"],
-            json!([[{"text": "OK"}, {"text": "FINISHED"}]])
-        );
-
-        let settings = serde_json::to_value(settings_keyboard()).unwrap();
-        assert_eq!(
-            settings["keyboard"],
+            value["keyboard"],
             json!([
                 [{"text": "Owner reminder times"}],
                 [{"text": "Safety reminder times"}],
+                [{"text": "Safety alert template"}],
+                [{"text": "Safety recovery template"}],
                 [{"text": "Back"}]
             ])
         );
+    }
 
-        let prompt = serde_json::to_value(setting_prompt_keyboard()).unwrap();
-        assert_eq!(prompt["keyboard"], json!([[{"text": "Back"}]]));
+    #[test]
+    fn template_keyboard_uses_examples_and_guide_labels() {
+        let value = serde_json::to_value(safety_template_keyboard()).unwrap();
+        assert_eq!(
+            value["keyboard"],
+            json!([
+                [{"text": "Rendered examples"}, {"text": "Guide"}],
+                [{"text": "Back"}]
+            ])
+        );
     }
 }

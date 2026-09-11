@@ -56,8 +56,42 @@ pub(super) async fn set_reminder_minutes(
         SettingsPosition::Main | SettingsPosition::Settings => {
             unreachable!("settings position does not select a reminder schedule")
         }
+        SettingsPosition::SafetyAlertTemplate => {
+            unreachable!("settings position does not select a reminder schedule")
+        }
+        SettingsPosition::SafetyRecoveryTemplate => {
+            unreachable!("settings position does not select a reminder schedule")
+        }
     }
     update.update(tx).await?;
+    Ok(())
+}
+
+pub(super) async fn set_safety_alert_template(
+    tx: &DatabaseTransaction,
+    value: String,
+) -> anyhow::Result<()> {
+    settings::ActiveModel {
+        id: Set(1),
+        safety_alert_template: Set(value),
+        ..Default::default()
+    }
+    .update(tx)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn set_safety_recovery_template(
+    tx: &DatabaseTransaction,
+    value: String,
+) -> anyhow::Result<()> {
+    settings::ActiveModel {
+        id: Set(1),
+        safety_recovery_template: Set(value),
+        ..Default::default()
+    }
+    .update(tx)
+    .await?;
     Ok(())
 }
 
@@ -125,6 +159,24 @@ pub(crate) fn safe_error(error: &anyhow::Error) -> String {
     }
 }
 
+/// Telegram reports malformed rich Markdown and overlong message bodies as
+/// client errors. Those are caused by the configured alert template and can be
+/// handled with the built-in alert; permission, rate-limit, and other API
+/// errors must retain the normal transaction/retry path.
+pub(crate) fn is_message_rejection(error: &anyhow::Error) -> bool {
+    let Some(frankenstein::Error::Api(response)) = error.downcast_ref::<frankenstein::Error>()
+    else {
+        return false;
+    };
+    if response.error_code != 400 {
+        return false;
+    }
+    let description = response.description.to_ascii_lowercase();
+    description.contains("can't parse entities")
+        || description.contains("can't parse rich message")
+        || description.contains("message is too long")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +200,17 @@ mod tests {
             retry_delay(&anyhow::anyhow!("database unavailable")),
             ChronoDuration::seconds(5)
         );
+        let malformed: anyhow::Error =
+            frankenstein::Error::Api(frankenstein::response::ErrorResponse {
+                ok: false,
+                description: "Bad Request: can't parse entities".to_owned(),
+                error_code: 400,
+                parameters: None,
+            })
+            .into();
+        assert!(is_message_rejection(&malformed));
+        assert!(!is_message_rejection(&anyhow::anyhow!(
+            "database unavailable"
+        )));
     }
 }

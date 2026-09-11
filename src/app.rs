@@ -1,6 +1,6 @@
 use crate::{
     Config, db,
-    entity::{inbox, runtime},
+    entity::{inbox, runtime, settings},
     state::{DateTimeUtc, IngressSource, normalize},
     telegram::Telegram,
 };
@@ -24,7 +24,11 @@ impl App {
     /// Open without starting background tasks, also useful for explicit-time scenarios.
     pub async fn open(config: Config, path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let db = db::open(path.as_ref()).await?;
-        let telegram = Telegram::new(&config)?;
+        let saved_settings = settings::Entity::find_by_id(1)
+            .one(&db)
+            .await?
+            .context("missing settings")?;
+        let telegram = Telegram::new(&config, &saved_settings)?;
         let (shutdown, _) = watch::channel(false);
         Ok(Self {
             db,

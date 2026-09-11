@@ -10,6 +10,8 @@ pub struct Model {
     pub id: i64,
     pub owner_reminder_minutes: ReminderMinutes,
     pub safety_reminder_minutes: ReminderMinutes,
+    pub safety_alert_template: String,
+    pub safety_recovery_template: String,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

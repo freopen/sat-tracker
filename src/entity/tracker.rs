@@ -13,6 +13,9 @@ pub struct Model {
     pub started_at: Option<DateTimeUtc>,
     pub started_location: Option<String>,
     pub last_event_at: Option<DateTimeUtc>,
+    /// The timestamp from which the current reminder schedule is measured.
+    /// An alert mail that starts a hike establishes this exactly like an OK
+    /// mail, so the field remains present for every active hike.
     pub last_ok_at: Option<DateTimeUtc>,
     pub last_body: Option<String>,
     pub location: Option<String>,
