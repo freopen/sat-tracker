@@ -1,0 +1,205 @@
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /tg
+    body:
+      update_id: 1
+      message:
+        message_id: 1
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Settings
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: Choose a setting.}
+      disable_notification: true
+      reply_markup:
+        keyboard:
+          - [{text: Owner reminder times}]
+          - [{text: Safety reminder times}]
+          - [{text: Safety alert template}]
+          - [{text: Safety recovery template}]
+          - [{text: Back}]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 2
+      message:
+        message_id: 2
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Owner reminder times
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message:
+        markdown: "Owner reminder times are currently 30.\nType a new comma-separated list of positive, strictly increasing minutes (for example, 30, 45, 60)."
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Back}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 2, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 3
+      message:
+        message_id: 3
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: 45, 30
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message:
+        markdown: "Invalid reminder times.\n\nOwner reminder times are currently 30.\nType a new comma-separated list of positive, strictly increasing minutes (for example, 30, 45, 60)."
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Back}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 4
+      message:
+        message_id: 4
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: 30, 45, 60
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: "Owner reminder times updated to 30, 45, 60."}
+      disable_notification: true
+      reply_markup:
+        keyboard:
+          - [{text: Owner reminder times}]
+          - [{text: Safety reminder times}]
+          - [{text: Safety alert template}]
+          - [{text: Safety recovery template}]
+          - [{text: Back}]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 4, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 5
+      message:
+        message_id: 5
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Safety reminder times
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message:
+        markdown: "Safety reminder times are currently 60.\nType a new comma-separated list of positive, strictly increasing minutes (for example, 30, 45, 60)."
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Back}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 5, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 6
+      message:
+        message_id: 6
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: 45, 90
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: "Safety reminder times updated to 45, 90."}
+      disable_notification: true
+      reply_markup:
+        keyboard:
+          - [{text: Owner reminder times}]
+          - [{text: Safety reminder times}]
+          - [{text: Safety alert template}]
+          - [{text: Safety recovery template}]
+          - [{text: Back}]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 6, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 7
+      message:
+        message_id: 7
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Back
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: Choose an action.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Start hike}, {text: Settings}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 7, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 8
+      message:
+        message_id: 8
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Start hike
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike started.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 8, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 9, date: 1700000000, chat: {id: 10, type: private}, text: sent}}

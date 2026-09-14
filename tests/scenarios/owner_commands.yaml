@@ -1,0 +1,152 @@
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /tg
+    body:
+      update_id: 1
+      message:
+        message_id: 1
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: /start
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: Choose an action.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Start hike}, {text: Settings}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 2
+      message:
+        message_id: 2
+        date: 1700000000
+        chat: {id: 99, type: private}
+        text: Settings
+- in:
+    path: /tg
+    body:
+      update_id: 3
+      message:
+        message_id: 3
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: /unknown
+- in:
+    path: /tg
+    body:
+      update_id: 4
+      message:
+        message_id: 4
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: /version
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message:
+        markdown: "Version: ${VERSION}\nBuild time: ${BUILD_TIME}\nGit commit: ${GIT_COMMIT}\nGit dirty: ${GIT_DIRTY}"
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Start hike}, {text: Settings}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 2, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 8
+      edited_message:
+        message_id: 8
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Settings
+- in:
+    path: /tg
+    body:
+      update_id: 5
+      message:
+        message_id: 5
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Start hike
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike started.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 4, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 6
+      message:
+        message_id: 6
+        date: 1700000001
+        chat: {id: 10, type: private}
+        text: OK
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 5, date: 1700000001, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 7
+      message:
+        message_id: 7
+        date: 1700000002
+        chat: {id: 10, type: private}
+        text: FINISHED
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike finished.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Start hike}, {text: Settings}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 6, date: 1700000002, chat: {id: 10, type: private}, text: sent}}

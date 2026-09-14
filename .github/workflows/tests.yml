@@ -17,5 +17,8 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run tests
+      - name: Run production tests
         run: cargo test --workspace --locked
+
+      - name: Run E2E-feature tests
+        run: cargo test --workspace --locked --features e2e

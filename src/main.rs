@@ -1,29 +1,18 @@
-use std::{future::IntoFuture, net::SocketAddr, sync::Arc};
-
 use anyhow::Result;
-use sat_tracker::{App, Config, build_info, router};
-use tokio::net::TcpListener;
-use tokio::signal::unix::{SignalKind, signal};
+use sat_tracker::App;
+use std::sync::Arc;
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-
-    let terminate = async {
-        let mut signal =
-            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-        signal.recv().await;
-    };
-
+async fn shutdown_signal(app: Arc<App>, mut terminate: Signal) -> Result<()> {
+    let ctrl_c = tokio::signal::ctrl_c();
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        result = ctrl_c => result?,
+        _ = terminate.recv() => {},
     }
+    app.shutdown();
+    Ok(())
 }
 
 #[tokio::main]
@@ -34,40 +23,18 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let build = build_info();
     info!(
-        version = build.version,
-        build_time = build.build_time,
-        git_commit = build.git_commit,
-        git_dirty = build.git_dirty,
+        version = env!("CARGO_PKG_VERSION"),
+        build_time = option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("unknown"),
+        git_commit = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown"),
+        git_dirty = option_env!("VERGEN_GIT_DIRTY").unwrap_or("unknown"),
         "sat-tracker version"
     );
 
-    let config = Config::load()?;
-
-    let app = Arc::new(App::open(config, "sat-tracker.sqlite").await?);
-    let runner = app.clone().run();
-
-    let router = router(Arc::clone(&app));
-    let address: SocketAddr = "0.0.0.0:8080".parse().unwrap();
-    let listener = TcpListener::bind(address).await?;
-    info!(%address, "listening");
-    let server = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .into_future();
-    tokio::pin!(server);
-    tokio::pin!(runner);
-    tokio::select! {
-        result = &mut server => {
-            app.shutdown();
-            let runner_result = runner.await;
-            result?;
-            runner_result?;
-        }
-        result = &mut runner => match result {
-            Ok(()) => anyhow::bail!("tick scheduler stopped unexpectedly"),
-            Err(error) => return Err(error),
-        },
-    }
-    Ok(())
+    let terminate = signal(SignalKind::terminate())?;
+    let app = Arc::new(App::new().await?);
+    let signal_task = tokio::spawn(shutdown_signal(Arc::clone(&app), terminate));
+    let result = app.serve().await;
+    signal_task.abort();
+    result
 }

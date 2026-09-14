@@ -1,0 +1,82 @@
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /mail
+    body: "Message-ID: <same@example.test>\r\nContent-Type: text/plain\r\n\r\nOK"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike started.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 2, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /mail
+    body: "Message-ID: <same@example.test>\r\nContent-Type: text/plain\r\n\r\nFINISHED"
+- in:
+    path: /mail
+    body: "Content-Type: text/plain\r\n\r\nOK"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /mail
+    body: "Content-Type: text/plain\r\n\r\nOK"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 4, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- restart: true
+- out:
+    path: /bottest/deleteWebhook
+    body: {}
+    response: {body: {ok: true, result: true}}
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /mail
+    body: "Message-ID: <same@example.test>\r\nContent-Type: text/plain\r\n\r\nFINISHED"
