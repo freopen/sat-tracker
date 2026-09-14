@@ -1,39 +1,9 @@
 repos:
   - repo: local
     hooks:
-      - id: rustfmt
-        name: Rust formatting
-        entry: cargo fmt --all -- --check
-        language: system
-        pass_filenames: false
-        always_run: true
-      - id: clippy
-        name: Clippy (production)
-        entry: cargo clippy --workspace --all-targets --locked -- -D warnings
-        language: system
-        pass_filenames: false
-        always_run: true
-      - id: clippy-all-features
-        name: Clippy (all features)
-        entry: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        language: system
-        pass_filenames: false
-        always_run: true
-      - id: tests
-        name: Production tests
-        entry: cargo test --workspace --locked
-        language: system
-        pass_filenames: false
-        always_run: true
-      - id: tests-e2e
-        name: Tests with E2E enabled
-        entry: cargo test --workspace --locked --features e2e -- --test-threads=1
-        language: system
-        pass_filenames: false
-        always_run: true
-      - id: diff-check
-        name: Diff whitespace check
-        entry: git --no-pager diff --no-ext-diff --no-textconv --check HEAD
+      - id: check
+        name: All checks
+        entry: make check
         language: system
         pass_filenames: false
         always_run: true

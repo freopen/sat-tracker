@@ -175,19 +175,22 @@ Debian Bookworm, the latest stable Rust toolchain (including rustfmt, Clippy,
 and rust-src), and prek. It runs as the `vscode` user and installs the Git
 pre-commit hook automatically. Nix, Devenv, and direnv are no longer required.
 
-Run every check with:
+Run every check with live tool output:
 
 ```sh
-prek run --all-files
+make check
 ```
 
-The tracked [prek configuration](.pre-commit-config.yaml) runs formatting,
+The [Makefile](Makefile) defines formatting,
 Clippy for production and all features with warnings denied, production tests,
 tests with E2E enabled, and Git diff whitespace checks. Every commit runs the
-same checks. Outside the devcontainer, install Rust and prek, then run
+same checks through the [prek configuration](.pre-commit-config.yaml), which
+calls `make check`. `prek run --all-files` also runs all checks,
+but buffers tool output. Outside the devcontainer, install Make, Rust, and prek, then run
 `prek install --force` once to replace any old Devenv hook.
 
-GitHub CI builds the `checks` Docker target, which inherits `dev` and runs prek.
+GitHub CI builds the `checks` Docker target, which inherits `dev` and runs
+`make check` directly so tool output streams into the build log.
 The production image builds from `checks`, compiles the release binary without
 the E2E feature, and copies it into the Debian 12 distroless runtime. To run
 these builds locally from the repository root:
@@ -209,12 +212,12 @@ clock with a deterministic virtual clock; E2E still exercises the real binary
 and real network client.
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
-cargo test --workspace --locked --features e2e -- --test-threads=1
-git --no-pager diff --no-ext-diff --no-textconv --check HEAD
+make rustfmt
+make clippy
+make clippy-all-features
+make tests
+make tests-e2e
+make diff-check
 ```
 
 E2E transcripts live in [`tests/scenarios/`](tests/scenarios/). Every outgoing

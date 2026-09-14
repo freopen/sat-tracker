@@ -37,7 +37,7 @@ COPY --chown=vscode:vscode . .
 
 RUN git --version \
     && git rev-parse --verify HEAD \
-    && prek run --all-files
+    && make check
 
 FROM checks AS builder
 
