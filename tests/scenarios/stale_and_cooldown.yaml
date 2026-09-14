@@ -1,0 +1,96 @@
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /mail
+    body: "Message-ID: <start@example.test>\r\nContent-Type: text/plain\r\n\r\nOK"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike started.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 2, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /mail
+    body: "Message-ID: <stale-ok@example.test>\r\nDate: Tue, 14 Nov 2023 22:13:19 +0000\r\nContent-Type: text/plain\r\n\r\nOK"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /mail
+    body: "Message-ID: <stale-finished@example.test>\r\nDate: Tue, 14 Nov 2023 22:13:19 +0000\r\nContent-Type: text/plain\r\n\r\nFINISHED"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike finished.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Start hike}, {text: Settings}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 4, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- wait: 5m
+- in:
+    path: /mail
+    body: "Message-ID: <cooldown@example.test>\r\nContent-Type: text/plain\r\n\r\nOK"
+- wait: 1ms
+- in:
+    path: /mail
+    body: "Message-ID: <after-cooldown@example.test>\r\nContent-Type: text/plain\r\n\r\nOK"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike started.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 5, date: 1700000300, chat: {id: 10, type: private}, text: sent}}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: OK received.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 6, date: 1700000300, chat: {id: 10, type: private}, text: sent}}

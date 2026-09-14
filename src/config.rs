@@ -5,28 +5,31 @@ use figment::{
 };
 use regex::Regex;
 use serde::{Deserialize, Deserializer, de::Error};
+use std::net::SocketAddr;
 
 #[derive(Clone, Deserialize)]
-pub struct Config {
+pub(crate) struct Config {
     #[serde(deserialize_with = "deserialize_regex")]
-    pub ok_regex: Regex,
+    pub(crate) ok_regex: Regex,
     #[serde(deserialize_with = "deserialize_regex")]
-    pub finished_regex: Regex,
-    pub owner_chat_id: i64,
-    pub safety_chat_id: i64,
+    pub(crate) finished_regex: Regex,
+    pub(crate) owner_chat_id: i64,
+    pub(crate) safety_chat_id: i64,
     #[serde(default = "default_telegram_api_url")]
-    pub telegram_api_url: String,
+    pub(crate) telegram_api_url: String,
     #[serde(default)]
-    pub telegram_webhook_url: String,
-    pub telegram_bot_token: String,
+    pub(crate) telegram_webhook_url: String,
+    #[allow(dead_code)]
+    pub(crate) telegram_bot_token: String,
+    #[serde(default = "default_listen_address")]
+    pub(crate) listen_address: SocketAddr,
 }
 
 impl Config {
-    pub fn load() -> Result<Self> {
+    pub(crate) fn load() -> Result<Self> {
         let config: Self = Figment::new()
             .merge(Yaml::file("./config.yaml"))
             .extract()?;
-
         config.validate()?;
         Ok(config)
     }
@@ -46,6 +49,12 @@ impl Config {
 
 fn default_telegram_api_url() -> String {
     "https://api.telegram.org".to_owned()
+}
+
+fn default_listen_address() -> SocketAddr {
+    "0.0.0.0:8080"
+        .parse()
+        .expect("default listen address is valid")
 }
 
 fn deserialize_regex<'de, D>(deserializer: D) -> std::result::Result<Regex, D::Error>
@@ -75,6 +84,7 @@ mod tests {
         let config: Config = serde_json::from_value(value("OK", "FINISHED")).unwrap();
         assert_eq!(config.telegram_api_url, "https://api.telegram.org");
         assert!(config.telegram_webhook_url.is_empty());
+        assert_eq!(config.listen_address, "0.0.0.0:8080".parse().unwrap());
     }
 
     #[test]
@@ -88,6 +98,7 @@ mod tests {
             telegram_api_url: String::new(),
             telegram_webhook_url: String::new(),
             telegram_bot_token: "test".to_owned(),
+            listen_address: "0.0.0.0:8080".parse().unwrap(),
         };
         assert!(empty.validate().is_err());
         empty.ok_regex = Regex::new("OK").unwrap();

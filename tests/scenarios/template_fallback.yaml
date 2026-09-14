@@ -1,0 +1,107 @@
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /tg
+    body:
+      update_id: 1
+      message:
+        message_id: 1
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Settings
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: Choose a setting.}
+      disable_notification: true
+      reply_markup:
+        keyboard:
+          - [{text: Owner reminder times}]
+          - [{text: Safety reminder times}]
+          - [{text: Safety alert template}]
+          - [{text: Safety recovery template}]
+          - [{text: Back}]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 2
+      message:
+        message_id: 2
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: Safety alert template
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message:
+        markdown: |-
+          Safety alert template:
+
+          ```jinja2
+          {% if last_alert is not none %}**SAFETY ALERT:** {{ last_alert }}{% else %}**SAFETY ALERT:** No OK has been received since {{ last_ok_at }}.{% endif %}
+
+          *Here are details to help locate the hiker.*
+
+          - **Hike started:** {{ started_at | date }} at {{ started_at | time }}
+          - **Starting location:** {% if started_location is not none %}{{ started_location }}{% else %}not recorded{% endif %}
+          - **Most recent event:** {{ last_event_at }}
+          - **Last OK:** {{ last_ok_at }}
+          - **Last known location:** {% if location is not none %}{{ location }}{% else %}not recorded{% endif %}
+
+          *Contact the hiker and use the locations above to decide what to do next.*
+          ```
+
+          Send a new template, or choose an action below.
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Rendered examples}, {text: Guide}], [{text: Back}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 2, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- in:
+    path: /tg
+    body:
+      update_id: 3
+      message:
+        message_id: 3
+        date: 1700000000
+        chat: {id: 10, type: private}
+        text: "bad *"
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: "bad *"}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Rendered examples}, {text: Guide}], [{text: Back}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      status: 400
+      body: {ok: false, error_code: 400, description: "Bad Request: can't parse entities"}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message:
+        markdown: "Safety alert template was not saved. template sample was rejected by Telegram\n\nSend another template, or choose an action below."
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: Rendered examples}, {text: Guide}], [{text: Back}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 4, date: 1700000000, chat: {id: 10, type: private}, text: sent}}

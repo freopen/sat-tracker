@@ -1,0 +1,11 @@
+- out:
+    path: /bottest/setWebhook
+    body:
+      url: https://example.test/tg
+    response:
+      body: {ok: true, result: true}
+
+- in:
+    path: /healthz
+    response:
+      status: 204

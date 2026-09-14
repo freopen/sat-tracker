@@ -4,8 +4,13 @@ version = "0.4.0"
 edition = "2024"
 build = "build.rs"
 
+[features]
+default = []
+e2e = []
+
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 axum = "0.8"
 chrono = "0.4"
 sea-orm = { version = "2.0.2", default-features = false, features = ["macros", "sqlx-sqlite", "runtime-tokio-rustls", "with-chrono", "with-json"] }
@@ -19,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = [
     "macros",
+    "process",
     "rt-multi-thread",
     "signal",
     "sync",
@@ -29,9 +35,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+humantime = "2"
+mockall = "0.15"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_yaml = "0.9"
 tempfile = "3"
-tower = "0.5"
-wiremock = "0.6"
 
 [build-dependencies]
 vergen-gitcl = { version = "10", features = ["build"] }

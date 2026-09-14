@@ -1,0 +1,47 @@
+- out:
+    path: /bottest/setWebhook
+    body: {url: https://example.test/tg}
+    response: {body: {ok: true, result: true}}
+- in:
+    path: /healthz
+    response: {status: 204}
+- in:
+    path: /mail
+    body: |-
+      Message-ID: <mime@example.test>
+      Date: Tue, 14 Nov 2023 22:13:20 +0000
+      Content-Type: text/plain; charset=utf-8
+      Content-Transfer-Encoding: quoted-printable
+
+      Help=3A Lat 47.1 Lon 8.5
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 10
+      rich_message: {markdown: InReach hike started.}
+      disable_notification: true
+      reply_markup:
+        keyboard: [[{text: OK}, {text: FINISHED}]]
+        is_persistent: true
+        resize_keyboard: true
+    response:
+      body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
+- out:
+    path: /bottest/sendRichMessage
+    body:
+      chat_id: 20
+      rich_message:
+        markdown: |-
+          **SAFETY ALERT:** Help: Lat 47\.1 Lon 8\.5
+
+          *Here are details to help locate the hiker.*
+
+          - **Hike started:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
+          - **Starting location:** <tg-map lat="47.1" long="8.5" zoom="16"/>
+          - **Most recent event:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+          - **Last OK:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+          - **Last known location:** <tg-map lat="47.1" long="8.5" zoom="16"/>
+
+          *Contact the hiker and use the locations above to decide what to do next.*
+    response:
+      body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 20, type: private}, text: sent}}
