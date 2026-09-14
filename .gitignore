@@ -8,15 +8,3 @@ sat-tracker.sqlite-wal
 config.yaml
 result
 result-*
-devenv.local.nix
-
-# Devenv
-.devenv*
-devenv.local.nix
-devenv.local.yaml
-
-# direnv
-.direnv
-
-# pre-commit
-.pre-commit-config.yaml

@@ -1,6 +1,9 @@
 name: Tests
 
 on:
+  push:
+    branches-ignore:
+      - main
   pull_request:
 
 permissions:
@@ -14,11 +17,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-      - name: Run production tests
-        run: cargo test --workspace --locked
-
-      - name: Run E2E-feature tests
-        run: cargo test --workspace --locked --features e2e
+      - name: Run all checks in the development environment
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: checks
+          pull: true
+          no-cache-filters: dev,checks
+          cache-from: type=gha,scope=checks
+          cache-to: type=gha,scope=checks,mode=max

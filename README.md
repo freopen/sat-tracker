@@ -169,16 +169,52 @@ keep the token-bearing configuration private.
 
 ## Verification
 
+Open this repository with VS Code's **Dev Containers: Rebuild and Reopen in
+Container** command. The `dev` target in [`Dockerfile`](Dockerfile) provides
+Debian Bookworm, the latest stable Rust toolchain (including rustfmt, Clippy,
+and rust-src), and prek. It runs as the `vscode` user and installs the Git
+pre-commit hook automatically. Nix, Devenv, and direnv are no longer required.
+
+Run every check with:
+
+```sh
+prek run --all-files
+```
+
+The tracked [prek configuration](.pre-commit-config.yaml) runs formatting,
+Clippy for production and all features with warnings denied, production tests,
+tests with E2E enabled, and Git diff whitespace checks. Every commit runs the
+same checks. Outside the devcontainer, install Rust and prek, then run
+`prek install --force` once to replace any old Devenv hook.
+
+GitHub CI builds the `checks` Docker target, which inherits `dev` and runs prek.
+The production image builds from `checks`, compiles the release binary without
+the E2E feature, and copies it into the Debian 12 distroless runtime. To run
+these builds locally from the repository root:
+
+```sh
+docker build --pull --target dev -t sat-tracker-dev .
+docker build --pull --target checks .
+docker build --pull -t sat-tracker .
+```
+
+Rust's `stable` channel and prek's `latest` image are resolved when their build
+steps run. Use `--no-cache --pull` (or VS Code's **Rebuild Container Without
+Cache**) to refresh an existing environment. CI refreshes the development
+stage and executes checks on every build. Keep `.git` in the build context:
+the application embeds Git commit and dirty-state metadata.
+
 The default build is the production build. The `e2e` feature only replaces the
 clock with a deterministic virtual clock; E2E still exercises the real binary
 and real network client.
 
 ```sh
 cargo fmt --all -- --check
-cargo test --all-targets --locked
-cargo test --locked --features e2e --test e2e -- --test-threads=1
-cargo clippy --all-targets --all-features --locked -- -D warnings
-git diff --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
+cargo test --workspace --locked --features e2e -- --test-threads=1
+git --no-pager diff --no-ext-diff --no-textconv --check HEAD
 ```
 
 E2E transcripts live in [`tests/scenarios/`](tests/scenarios/). Every outgoing

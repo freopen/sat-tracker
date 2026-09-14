@@ -1,15 +1,19 @@
 {
-  "image": "ghcr.io/cachix/devenv/devcontainer:latest",
+  "name": "sat-tracker",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "target": "dev"
+  },
   "runArgs": ["--tmpfs=/tmp:rw,exec,nosuid,nodev,mode=1777"],
+  "remoteUser": "vscode",
   "overrideCommand": false,
-  "updateContentCommand": "devenv test",
+  "postCreateCommand": "prek install --force",
   "customizations": {
     "vscode": {
       "extensions": [
-        "jnoortheen.nix-ide",
         "rust-lang.rust-analyzer",
-        "tamasfe.even-better-toml",
-        "mkhl.direnv"
+        "tamasfe.even-better-toml"
       ]
     }
   }
