@@ -49,10 +49,14 @@ Concurrent local edits to the manifests or changelog can still conflict.
    Grant repository **Contents: Read and write** and **Pull requests: Read and
    write**. Install it only on `freopen/sat-tracker` and generate a private key.
 2. In this repository's **Settings → Secrets and variables → Actions**, add
-   repository variable **`RELEASE_APP_ID`** with its numeric App ID, and secret
+   repository variable **`RELEASE_APP_CLIENT_ID`** with the **Client ID** shown
+   in the App's settings (not its numeric App ID), and secret
    **`RELEASE_APP_PRIVATE_KEY`** with the complete PEM key. Keep the key outside
    the repository. No PAT or crates.io credential is needed. The App token lets
    release PRs trigger CI and published Releases trigger the container workflow.
+   If migrating from `RELEASE_APP_ID`, add the new variable before pushing the
+   workflow change; the old variable can then be deleted. The private key stays
+   the same.
 3. Under **Settings → Rules → Rulesets**, retain the required **`test`** check
    from **GitHub Actions**, with branches required to be up to date. Add only
    **Repository admin** to its bypass list with **Always** bypass, allowing

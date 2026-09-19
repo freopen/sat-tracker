@@ -1,0 +1,7 @@
+# actionlint 1.7.12 bundles an outdated create-github-app-token@v3 schema.
+# Remove these exceptions when https://github.com/rhysd/actionlint/issues/669 is fixed.
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      - '^missing input "app-id" which is required by action "actions/create-github-app-token@v3"\.'
+      - '^input "client-id" is not defined in action "actions/create-github-app-token@v3"\.'
