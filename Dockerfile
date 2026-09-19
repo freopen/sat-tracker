@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim AS dev
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS dev
 RUN chmod 1777 /tmp
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -11,9 +11,9 @@ RUN apt-get update \
     && echo 'vscode ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/vscode \
     && chmod 0440 /etc/sudoers.d/vscode
 
-COPY --from=ghcr.io/j178/prek:latest /prek /usr/local/bin/prek
+COPY --from=ghcr.io/j178/prek:latest@sha256:f27d17a6b21959c5ba7d65039d72e9502c6951e79cbbfae2c1a0498a4859a5cb /prek /usr/local/bin/prek
 
-COPY --from=rhysd/actionlint:1.7.12 /usr/local/bin/actionlint /usr/local/bin/actionlint
+COPY --from=rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 /usr/local/bin/actionlint /usr/local/bin/actionlint
 
 # Use the static binary so this also works on Debian Bookworm and ARM64.
 ARG RELEASE_PLZ_VERSION=0.3.169
@@ -59,7 +59,7 @@ RUN cargo build --release --locked --bin sat-tracker \
     && mkdir /src/runtime \
     && cp target/release/sat-tracker /src/runtime/
 
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 
 COPY --from=builder --chown=65532:65532 /src/runtime /app
 
