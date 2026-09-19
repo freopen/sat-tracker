@@ -5,6 +5,7 @@ use minijinja::{Environment, Error, ErrorKind, UndefinedBehavior, Value};
 use regex::Regex;
 use sea_orm::TryIntoModel;
 use serde::{Deserialize, Serialize};
+use telegram_markdown_v2::{UnsupportedTagsStrategy, convert_with_strategy};
 use tracing::warn;
 
 pub(crate) const DEFAULT_SAFETY_ALERT_TEMPLATE: &str = r#"{% if last_alert is not none %}**SAFETY ALERT:** {{ last_alert }}{% else %}**SAFETY ALERT:** No OK has been received since {{ last_ok_at }}.{% endif %}
@@ -23,6 +24,7 @@ pub(crate) const DEFAULT_SAFETY_RECOVERY_TEMPLATE: &str = r#"{% if active %}**SA
 
 pub(crate) const MAX_MESSAGE_CHARS: usize = 32_768;
 pub(crate) const MAX_TEMPLATE_BYTES: usize = MAX_MESSAGE_CHARS * 4;
+const MAX_SEND_MESSAGE_CHARS: usize = 4_096;
 const DATETIME_VALUE_FIELD: &str = "__sat_tracker_datetime";
 const DATETIME_FORMAT_FIELD: &str = "__sat_tracker_datetime_format";
 const GUIDE_SOURCE: &str = include_str!("guide.md");
@@ -58,10 +60,21 @@ impl TemplateId {
         render_named(&ctx.templates, self.name(), &tracker)
     }
 
+    pub(crate) fn render_mdv2(self, ctx: &Ctx) -> anyhow::Result<String> {
+        render_mdv2_text(&self.render(ctx)?)
+    }
+
     pub(crate) fn render_examples(self, ctx: &Ctx) -> anyhow::Result<Vec<String>> {
         self.example_trackers()
             .iter()
             .map(|tracker| render_named(&ctx.templates, self.name(), tracker))
+            .collect()
+    }
+
+    pub(crate) fn render_mdv2_examples(self, ctx: &Ctx) -> anyhow::Result<Vec<String>> {
+        self.render_examples(ctx)?
+            .iter()
+            .map(|example| render_mdv2_text(example))
             .collect()
     }
 
@@ -306,6 +319,33 @@ fn telegram_location(value: &Value) -> Option<(f64, f64)> {
     Some((latitude, longitude))
 }
 
+fn google_maps_links(value: &str) -> String {
+    static TG_MAP: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"<tg-map lat="([^"]+)" long="([^"]+)" zoom="[^"]+"/>"#)
+            .expect("tg-map regex is valid")
+    });
+    TG_MAP
+        .replace_all(value, |matched: &regex::Captures<'_>| {
+            let latitude = matched.get(1).expect("latitude capture exists").as_str();
+            let longitude = matched.get(2).expect("longitude capture exists").as_str();
+            format!(
+                "[Google Maps](https://www.google.com/maps/search/?api=1&query={latitude},{longitude})"
+            )
+        })
+        .into_owned()
+}
+
+fn render_mdv2_text(value: &str) -> anyhow::Result<String> {
+    let rendered = google_maps_links(value);
+    let mut text = convert_with_strategy(&rendered, UnsupportedTagsStrategy::Escape)?;
+    text = text.trim_end_matches('\n').to_owned();
+    text = text.chars().take(MAX_SEND_MESSAGE_CHARS).collect();
+    while text.ends_with('\\') {
+        text.pop();
+    }
+    Ok(text)
+}
+
 fn markdown_escape(value: &str) -> String {
     static ESCAPE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(r"[\\&<>_*\[\]()~`#+=\-|{}.!]").expect("markdown escape regex is valid")
@@ -429,6 +469,31 @@ mod tests {
                 .render_str("{{ location }}", &tracker)
                 .expect("JSON location renders"),
             r#"<tg-map lat="47.3769" long="8.5417" zoom="16"/>"#
+        );
+    }
+
+    #[test]
+    fn tg_map_tags_convert_to_google_maps_links_for_plain_messages() {
+        assert_eq!(
+            google_maps_links(r#"Before <tg-map lat="47.3769" long="8.5417" zoom="16"/> after"#),
+            "Before [Google Maps](https://www.google.com/maps/search/?api=1&query=47.3769,8.5417) after"
+        );
+    }
+
+    #[test]
+    fn render_mdv2_preserves_datetime_entities_and_formatting() {
+        let mut ctx = crate::app::make_test_ctx();
+        ctx.templates
+            .add_template_owned(
+                TemplateId::SafetyAlert.name().to_owned(),
+                "**bold** *italic* ![2023\\-11\\-14T22:13:20\\+00:00](tg://time?unix=1700000000&format=d)"
+                    .to_owned(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            TemplateId::SafetyAlert.render_mdv2(&ctx).unwrap(),
+            "*bold* _italic_ ![2023\\-11\\-14T22:13:20\\+00:00](tg://time?unix=1700000000&format=d)"
         );
     }
 

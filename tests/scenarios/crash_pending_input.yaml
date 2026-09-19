@@ -67,22 +67,22 @@
     response:
       body: {ok: true, result: {message_id: 3, date: 1700003600, chat: {id: 10, type: private}, text: sent}}
 - out:
-    path: /bottest/sendRichMessage
+    path: /bottest/sendMessage
     body:
       chat_id: 20
-      rich_message:
-        markdown: |-
-          **SAFETY ALERT:** No OK has been received since ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r).
+      text: |-
+        *SAFETY ALERT:* No OK has been received since ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)\.
 
-          *Here are details to help locate the hiker.*
+        _Here are details to help locate the hiker\._
 
-          - **Hike started:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
-          - **Starting location:** not recorded
-          - **Most recent event:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last OK:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last known location:** not recorded
+        •   *Hike started:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
+        •   *Starting location:* not recorded
+        •   *Most recent event:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last OK:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last known location:* not recorded
 
-          *Contact the hiker and use the locations above to decide what to do next.*
+        _Contact the hiker and use the locations above to decide what to do next\._
+      parse_mode: MarkdownV2
     response:
       body: {ok: true, result: {message_id: 4, date: 1700003600, chat: {id: 20, type: private}, text: sent}}
 - out:
@@ -98,12 +98,12 @@
     response:
       body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
 - out:
-    path: /bottest/sendRichMessage
+    path: /bottest/sendMessage
     body:
       chat_id: 20
-      rich_message:
-        markdown: |-
-          **SAFETY CONTACT RESUMED:** The hike was finished without issues.
+      text: |-
+        *SAFETY CONTACT RESUMED:* The hike was finished without issues\.
+      parse_mode: MarkdownV2
     response:
       body: {ok: true, result: {message_id: 4, date: 1700003600, chat: {id: 20, type: private}, text: sent}}
 - in:

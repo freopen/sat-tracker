@@ -27,21 +27,21 @@
     response:
       body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
 - out:
-    path: /bottest/sendRichMessage
+    path: /bottest/sendMessage
     body:
       chat_id: 20
-      rich_message:
-        markdown: |-
-          **SAFETY ALERT:** Help: Lat 47\.1 Lon 8\.5
+      text: |-
+        *SAFETY ALERT:* Help: Lat 47\.1 Lon 8\.5
 
-          *Here are details to help locate the hiker.*
+        _Here are details to help locate the hiker\._
 
-          - **Hike started:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
-          - **Starting location:** <tg-map lat="47.1" long="8.5" zoom="16"/>
-          - **Most recent event:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last OK:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last known location:** <tg-map lat="47.1" long="8.5" zoom="16"/>
+        •   *Hike started:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
+        •   *Starting location:* [Google Maps](https://www.google.com/maps/search/?api=1&query=47.1,8.5)
+        •   *Most recent event:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last OK:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last known location:* [Google Maps](https://www.google.com/maps/search/?api=1&query=47.1,8.5)
 
-          *Contact the hiker and use the locations above to decide what to do next.*
+        _Contact the hiker and use the locations above to decide what to do next\._
+      parse_mode: MarkdownV2
     response:
       body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 20, type: private}, text: sent}}

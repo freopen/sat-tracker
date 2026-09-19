@@ -8,8 +8,8 @@ use crate::{
 };
 use anyhow::Context;
 use frankenstein::{
-    AsyncTelegramApi,
-    methods::SendRichMessageParams,
+    AsyncTelegramApi, ParseMode,
+    methods::{SendMessageParams, SendRichMessageParams},
     rich_message::InputRichMessage,
     types::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup},
     updates::{Update, UpdateContent},
@@ -243,8 +243,17 @@ async fn submit_template(
 }
 
 async fn send_template_examples(ctx: &Ctx, template_id: TemplateId) -> anyhow::Result<()> {
-    for example in template_id.render_examples(ctx)? {
-        send_owner(ctx, &example).await?;
+    for text in template_id.render_mdv2_examples(ctx)? {
+        // Workaround for https://bugs.telegram.org/c/63275: Telegram Android
+        // does not render rich-message date_time entities in table cells.
+        let params = SendMessageParams::builder()
+            .chat_id(ctx.config.owner_chat_id)
+            .text(text)
+            .parse_mode(ParseMode::MarkdownV2)
+            .disable_notification(true)
+            .reply_markup(keyboard(ctx)?)
+            .build();
+        ctx.bot.send_message(&params).await?;
     }
     Ok(())
 }
@@ -398,7 +407,29 @@ pub(crate) fn keyboard(ctx: &Ctx) -> anyhow::Result<ReplyMarkup> {
 
 #[cfg(test)]
 mod tests {
-    use super::template_source;
+    use crate::app::make_test_ctx;
+    use crate::template::TemplateId;
+    use frankenstein::{
+        ParseMode,
+        response::MethodResponse,
+        types::{ChatId, Message},
+    };
+    use mockall::Sequence;
+
+    use super::{send_template_examples, template_source};
+
+    fn success() -> MethodResponse<Message> {
+        serde_json::from_value(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 1,
+                "date": 1700000000,
+                "chat": {"id": 10, "type": "private"},
+                "text": "sent"
+            }
+        }))
+        .unwrap()
+    }
 
     #[test]
     fn template_source_accepts_plain_text() {
@@ -430,5 +461,32 @@ mod tests {
     fn template_source_leaves_unfenced_text_unchanged() {
         let text = "plain template";
         assert_eq!(template_source(text), text);
+    }
+
+    #[tokio::test]
+    async fn template_examples_use_markdown_v2_send_messages() {
+        let mut ctx = make_test_ctx();
+        let mut sequence = Sequence::new();
+        for _ in 0..2 {
+            ctx.bot
+                .expect_send_message()
+                .withf(|params| {
+                    params.chat_id == ChatId::Integer(10)
+                        && params.parse_mode == Some(ParseMode::MarkdownV2)
+                        && params.disable_notification == Some(true)
+                        && params.text.contains("![")
+                        && params.text.contains("tg://time?")
+                        && params
+                            .text
+                            .contains("https://www.google.com/maps/search/?api=1&query=")
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Ok(success()));
+        }
+
+        send_template_examples(&ctx, TemplateId::SafetyAlert)
+            .await
+            .unwrap();
     }
 }

@@ -21,22 +21,22 @@
     response:
       body: {ok: true, result: {message_id: 1, date: 1700000000, chat: {id: 10, type: private}, text: sent}}
 - out:
-    path: /bottest/sendRichMessage
+    path: /bottest/sendMessage
     body:
       chat_id: 20
-      rich_message:
-        markdown: |-
-          **SAFETY ALERT:** first alert
+      text: |-
+        *SAFETY ALERT:* first alert
 
-          *Here are details to help locate the hiker.*
+        _Here are details to help locate the hiker\._
 
-          - **Hike started:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
-          - **Starting location:** not recorded
-          - **Most recent event:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last OK:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last known location:** not recorded
+        •   *Hike started:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
+        •   *Starting location:* not recorded
+        •   *Most recent event:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last OK:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last known location:* not recorded
 
-          *Contact the hiker and use the locations above to decide what to do next.*
+        _Contact the hiker and use the locations above to decide what to do next\._
+      parse_mode: MarkdownV2
     response:
       body: {ok: true, result: {message_id: 3, date: 1700000000, chat: {id: 20, type: private}, text: sent}}
 - wait: 1s
@@ -44,22 +44,22 @@
     path: /mail
     body: "Message-ID: <second-alert@example.test>\r\nContent-Type: text/plain\r\n\r\nsecond alert"
 - out:
-    path: /bottest/sendRichMessage
+    path: /bottest/sendMessage
     body:
       chat_id: 20
-      rich_message:
-        markdown: |-
-          **SAFETY ALERT:** second alert
+      text: |-
+        *SAFETY ALERT:* second alert
 
-          *Here are details to help locate the hiker.*
+        _Here are details to help locate the hiker\._
 
-          - **Hike started:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
-          - **Starting location:** not recorded
-          - **Most recent event:** ![2023\-11\-14T22:13:21\+00:00](tg://time?unix=1700000001&format=r)
-          - **Last OK:** ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
-          - **Last known location:** not recorded
+        •   *Hike started:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=d) at ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=t)
+        •   *Starting location:* not recorded
+        •   *Most recent event:* ![2023\-11\-14T22:13:21\+00:00](tg://time?unix=1700000001&format=r)
+        •   *Last OK:* ![2023\-11\-14T22:13:20\+00:00](tg://time?unix=1700000000&format=r)
+        •   *Last known location:* not recorded
 
-          *Contact the hiker and use the locations above to decide what to do next.*
+        _Contact the hiker and use the locations above to decide what to do next\._
+      parse_mode: MarkdownV2
     response:
       body: {ok: true, result: {message_id: 4, date: 1700000001, chat: {id: 20, type: private}, text: sent}}
 - wait: 59s
@@ -79,11 +79,11 @@
     response:
       body: {ok: true, result: {message_id: 5, date: 1700003660, chat: {id: 10, type: private}, text: sent}}
 - out:
-    path: /bottest/sendRichMessage
+    path: /bottest/sendMessage
     body:
       chat_id: 20
-      rich_message:
-        markdown: |-
-          **SAFETY CONTACT RESUMED:** The hike continues normally.
+      text: |-
+        *SAFETY CONTACT RESUMED:* The hike continues normally\.
+      parse_mode: MarkdownV2
     response:
       body: {ok: true, result: {message_id: 6, date: 1700003660, chat: {id: 20, type: private}, text: sent}}

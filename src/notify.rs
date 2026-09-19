@@ -2,7 +2,7 @@ use crate::{app::Ctx, menu, template::TemplateId};
 use anyhow::Context;
 use chrono::Duration as ChronoDuration;
 use frankenstein::{
-    AsyncTelegramApi,
+    AsyncTelegramApi, ParseMode,
     methods::{SendMessageParams, SendRichMessageParams},
     rich_message::InputRichMessage,
 };
@@ -99,21 +99,24 @@ async fn notify_owner(ctx: &Ctx, text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn notify_safety(ctx: &Ctx, template: TemplateId, fallback: &str) -> anyhow::Result<()> {
+async fn notify_safety(ctx: &Ctx, template_id: TemplateId, fallback: &str) -> anyhow::Result<()> {
     if let Err(error) = (|| async {
-        let text = template.render(ctx)?;
-        let params = SendRichMessageParams::builder()
+        let text = template_id.render_mdv2(ctx)?;
+        // Workaround for https://bugs.telegram.org/c/63275: Telegram Android
+        // does not render rich-message date_time entities in table cells.
+        let params = SendMessageParams::builder()
             .chat_id(ctx.config.safety_chat_id)
-            .rich_message(InputRichMessage::builder().markdown(text).build())
+            .text(text)
+            .parse_mode(ParseMode::MarkdownV2)
             .build();
-        ctx.bot.send_rich_message(&params).await?;
+        ctx.bot.send_message(&params).await?;
         Ok::<(), anyhow::Error>(())
     })()
     .await
     {
         tracing::error!(
             reason = "safety_notification_failed",
-            template = ?template,
+            template = ?template_id,
             kind = %error,
             "using static safety fallback"
         );
@@ -129,8 +132,9 @@ async fn notify_safety(ctx: &Ctx, template: TemplateId, fallback: &str) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{app::make_test_ctx, bot::TelegramError, template::MAX_MESSAGE_CHARS};
+    use crate::{app::make_test_ctx, bot::TelegramError};
     use frankenstein::{
+        ParseMode,
         response::MethodResponse,
         types::{ChatId, Message},
     };
@@ -189,14 +193,11 @@ mod tests {
         for body in ["first alert", "second alert"] {
             ctx.tracker.last_alert = sea_orm::Set(Some(body.to_owned()));
             ctx.bot
-                .expect_send_rich_message()
+                .expect_send_message()
                 .withf(move |params| {
                     params.chat_id == ChatId::Integer(20)
-                        && params
-                            .rich_message
-                            .markdown
-                            .as_deref()
-                            .is_some_and(|text| text.contains(body))
+                        && params.parse_mode == Some(ParseMode::MarkdownV2)
+                        && params.text.contains(body)
                 })
                 .times(1)
                 .in_sequence(&mut sequence)
@@ -213,8 +214,11 @@ mod tests {
         let at = ctx.now;
         ctx.tracker.last_ok_at = sea_orm::ActiveValue::unchanged(Some(at));
         ctx.bot
-            .expect_send_rich_message()
-            .withf(|params| params.chat_id == ChatId::Integer(20))
+            .expect_send_message()
+            .withf(|params| {
+                params.chat_id == ChatId::Integer(20)
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+            })
             .times(2)
             .returning(|_| Ok(success()));
 
@@ -227,21 +231,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rich_alerts_are_bounded_by_the_new_message_limit() {
+    async fn plain_alerts_are_bounded_by_the_send_message_limit() {
         let mut ctx = active_context();
         let body = "x".repeat(5_000);
         ctx.tracker.last_alert = sea_orm::Set(Some(body.clone()));
         ctx.bot
-            .expect_send_rich_message()
+            .expect_send_message()
             .withf(|params| {
                 params.chat_id == ChatId::Integer(20)
-                    && params
-                        .rich_message
-                        .markdown
-                        .as_ref()
-                        .is_some_and(|message| {
-                            message.len() > 4_096 && message.chars().count() <= MAX_MESSAGE_CHARS
-                        })
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+                    && params.text.chars().count() == 4_096
             })
             .returning(|_| Ok(success()));
 
@@ -264,8 +263,11 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
         ctx.bot
-            .expect_send_rich_message()
-            .withf(|params| params.chat_id == ChatId::Integer(20))
+            .expect_send_message()
+            .withf(|params| {
+                params.chat_id == ChatId::Integer(20)
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+            })
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
@@ -287,8 +289,11 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
         ctx.bot
-            .expect_send_rich_message()
-            .withf(|params| params.chat_id == ChatId::Integer(20))
+            .expect_send_message()
+            .withf(|params| {
+                params.chat_id == ChatId::Integer(20)
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+            })
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
@@ -310,8 +315,11 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
         ctx.bot
-            .expect_send_rich_message()
-            .withf(|params| params.chat_id == ChatId::Integer(20))
+            .expect_send_message()
+            .withf(|params| {
+                params.chat_id == ChatId::Integer(20)
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+            })
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
@@ -334,8 +342,11 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_| Ok(success()));
         ctx.bot
-            .expect_send_rich_message()
-            .withf(|params| params.chat_id == ChatId::Integer(20))
+            .expect_send_message()
+            .withf(|params| {
+                params.chat_id == ChatId::Integer(20)
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+            })
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Err(api_error(400)));
@@ -355,7 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_safety_markdown_uses_the_static_fallback_and_logs_error() {
+    async fn rejected_safety_message_uses_the_static_fallback_and_logs_error() {
         let mut ctx = active_context();
         ctx.templates = crate::template::new_environment(
             "bad *",
@@ -365,8 +376,12 @@ mod tests {
         ctx.tracker.last_alert = sea_orm::Set(Some("alert".to_owned()));
         let mut sequence = Sequence::new();
         ctx.bot
-            .expect_send_rich_message()
-            .withf(|params| params.chat_id == ChatId::Integer(20))
+            .expect_send_message()
+            .withf(|params| {
+                params.chat_id == ChatId::Integer(20)
+                    && params.text == "bad \\*"
+                    && params.parse_mode == Some(ParseMode::MarkdownV2)
+            })
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Err(rejection()));
