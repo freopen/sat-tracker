@@ -1,28 +1,51 @@
 name: Publish container
 
 on:
-  push:
-    branches:
-      - main
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build, e.g. v0.6.0'
+        required: true
+        type: string
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: container-${{ github.ref }}
-  cancel-in-progress: true
+  group: container-release
+  cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   publish:
+    if: github.repository == 'freopen/sat-tracker' && (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease)
     runs-on: ubuntu-latest
-
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
-      - name: Check out repository
+      - name: Check out the release tag
         uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the version and determine image tags
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cargo metadata --no-deps --locked --format-version=1 | jq -r '.packages[] | select(.name == "sat-tracker") | .version')
+          [[ "$RELEASE_TAG" == "v$version" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease --jq '(.isDraft or .isPrerelease) | not' | grep -qx true
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "latest=$([[ "$RELEASE_TAG" == "$latest" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -40,10 +63,13 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=sha,prefix=,format=long
+            type=raw,value=${{ env.RELEASE_TAG }}
+            type=raw,value=${{ steps.source.outputs.sha }}
+            type=raw,value=latest,enable=${{ steps.source.outputs.latest }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
 
-      - name: Build and publish
+      - name: Build, check, and publish
         uses: docker/build-push-action@v7
         with:
           context: .

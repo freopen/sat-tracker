@@ -3,7 +3,7 @@ RUN chmod 1777 /tmp
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl git libssl-dev openssh-client \
-        pkg-config procps sudo vim \
+        gh jq pkg-config procps sudo vim \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash --uid 1000 vscode \
     && mkdir /src \
@@ -12,6 +12,20 @@ RUN apt-get update \
     && chmod 0440 /etc/sudoers.d/vscode
 
 COPY --from=ghcr.io/j178/prek:latest /prek /usr/local/bin/prek
+
+COPY --from=rhysd/actionlint:1.7.12 /usr/local/bin/actionlint /usr/local/bin/actionlint
+
+# Use the static binary so this also works on Debian Bookworm and ARM64.
+ARG RELEASE_PLZ_VERSION=0.3.169
+RUN case "$(uname -m)" in \
+        x86_64) release_plz_sha=ed709642b7f5b5fda4d47309884e65f84ca097cf9176cfd9793e8e66e28b48ad ;; \
+        aarch64) release_plz_sha=9fe32973a63bf1d18f02e877becf8619abc8b283f25d294f00d951e55c9946f2 ;; \
+        *) exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-$(uname -m)-unknown-linux-musl.tar.gz" -o /tmp/release-plz.tar.gz \
+    && echo "${release_plz_sha}  /tmp/release-plz.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/release-plz.tar.gz -C /usr/local/bin release-plz \
+    && rm /tmp/release-plz.tar.gz
 
 USER vscode
 ENV CARGO_HOME=/home/vscode/.cargo \

@@ -1,0 +1,11 @@
+[workspace]
+git_only = true
+dependencies_update = false
+changelog_update = true
+semver_check = false
+# Ordinary pushes never publish; only merged release-plz PRs do.
+release_always = false
+features_always_increment_minor = true
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+git_release_type = "prod"

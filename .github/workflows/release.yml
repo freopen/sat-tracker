@@ -1,0 +1,115 @@
+name: Release-plz
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.repository == 'freopen/sat-tracker' && github.ref == 'refs/heads/main' && github.event_name != 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-pr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/create-github-app-token@v3
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Read current version and clear any previous auto-merge decision
+        id: current
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          version=$(cargo metadata --no-deps --locked --format-version=1 | jq -r '.packages[] | select(.name == "sat-tracker") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          gh pr list --base main --state open --json number,headRefName,autoMergeRequest \
+            --jq '.[] | select(.headRefName | startswith("release-plz-")) | select(.autoMergeRequest != null) | .number' \
+            | while read -r pr; do gh pr merge "$pr" --disable-auto; done
+
+      - name: Prepare the release PR and changelog
+        uses: release-plz/action@v0.5
+        id: release
+        with:
+          command: release-pr
+          version: '0.3.169'
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+
+      - name: Enable auto-merge only for eligible weekly patches
+        if: github.event_name == 'schedule' && steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CURRENT_VERSION: ${{ steps.current.outputs.version }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          next=$(jq -r '.releases[] | select(.package_name == "sat-tracker") | .version' <<< "$RELEASE_PR")
+          IFS=. read -r major minor patch <<< "$CURRENT_VERSION"
+          if [[ "$next" != "$major.$minor.$((patch + 1))" ]]; then
+            echo "Version $next needs a manual release-PR merge." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq 'map(select(.draft == false and .prerelease == false)) | sort_by(.published_at) | last // {}')
+          if [[ "$(jq -r '.tag_name' <<< "$previous")" != "v$CURRENT_VERSION" ]]; then
+            echo "The current version has no published release yet; merge the release PR manually." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          published=$(jq -r '.published_at' <<< "$previous")
+          if (( $(date +%s) - $(date -d "$published" +%s) < 604800 )); then
+            echo "The last release is less than seven days old; leaving the PR for later." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          pr=$(jq -r '.number' <<< "$RELEASE_PR")
+          gh pr merge "$pr" --auto --squash
+          echo "Patch $next will merge once required checks pass." >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    if: github.repository == 'freopen/sat-tracker' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/create-github-app-token@v3
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: read
+
+      # release_always=false makes ordinary pushes a no-op. The App token lets
+      # a published GitHub Release trigger the container workflow.
+      - name: Publish only a merged release PR
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+          version: '0.3.169'
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}

@@ -167,12 +167,23 @@ keep the token-bearing configuration private.
 - Log outcomes with safe metadata. Tokens and message bodies never enter error
   logs.
 
+## Releases
+
+Ordinary pushes run checks without publishing. Use Conventional Commits:
+`feat:` prepares a minor release; `fix:` and dependency maintenance prepare a
+patch. **Actions → Release-plz → Run workflow** on `main` prepares or refreshes
+the release PR and changelog. Merge a minor-release PR when ready. Weekly runs
+can auto-merge patch-release PRs after checks pass, including ordinary fixes.
+See [release setup and recovery](.github/RELEASING.md) for the one-time GitHub App,
+ruleset, and baseline-tag setup.
+
 ## Verification
 
 Open this repository with VS Code's **Dev Containers: Rebuild and Reopen in
 Container** command. The `dev` target in [`Dockerfile`](Dockerfile) provides
 Debian Bookworm, the latest stable Rust toolchain (including rustfmt, Clippy,
-and rust-src), and prek. It runs as the `vscode` user and installs the Git
+and rust-src), prek, release-plz, actionlint, GitHub CLI, and jq. It runs as the
+`vscode` user and installs the Git
 pre-commit hook automatically. Nix, Devenv, and direnv are no longer required.
 
 Run every check with live tool output:
@@ -183,10 +194,12 @@ make check
 
 The [Makefile](Makefile) defines formatting,
 Clippy for production and all features with warnings denied, production tests,
-tests with E2E enabled, and Git diff whitespace checks. Every commit runs the
+tests with E2E enabled, workflow linting, and Git diff
+whitespace checks. Every commit runs the
 same checks through the [prek configuration](.pre-commit-config.yaml), which
 calls `make check`. `prek run --all-files` also runs all checks,
-but buffers tool output. Outside the devcontainer, install Make, Rust, and prek, then run
+but buffers tool output. Outside the devcontainer, install Make, Rust, prek,
+and actionlint, then run
 `prek install --force` once to replace any old Devenv hook.
 
 GitHub CI builds the `checks` Docker target, which inherits `dev` and runs
@@ -217,6 +230,7 @@ make clippy
 make clippy-all-features
 make tests
 make tests-e2e
+make workflows
 make diff-check
 ```
 

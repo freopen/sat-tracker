@@ -1,22 +1,52 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    "group:all"
-  ],
+  "extends": ["config:recommended"],
   "timezone": "Europe/Zurich",
-  "schedule": ["* 12 * * 5"],
+  "schedule": ["* * * * 0,6"],
   "prCreation": "immediate",
-  "automerge": true,
+  "automerge": false,
   "automergeType": "pr",
+  "automergeStrategy": "squash",
   "platformAutomerge": true,
   "ignoreTests": false,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "fix",
+  "semanticCommitScope": "deps",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["* * * * 0,6"]
+  },
   "packageRules": [
     {
-      "description": "Bump the main crate patch version with Cargo dependency updates",
+      "description": "Group compatible maintenance; release-plz owns application versions",
+      "matchManagers": ["cargo", "github-actions", "dockerfile"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "pinDigest", "lockFileMaintenance"],
+      "groupName": "compatible dependencies",
+      "automerge": true
+    },
+    {
       "matchManagers": ["cargo"],
-      "matchFileNames": ["Cargo.toml"],
-      "bumpVersion": "patch"
+      "rangeStrategy": "update-lockfile"
+    },
+    {
+      "description": "Pre-1.0 Cargo minor upgrades need review",
+      "matchManagers": ["cargo"],
+      "matchCurrentVersion": "/^0\\./",
+      "matchUpdateTypes": ["minor"],
+      "groupName": null,
+      "automerge": false
+    },
+    {
+      "description": "Track refreshed images on the existing release stream",
+      "matchManagers": ["dockerfile"],
+      "pinDigests": true
+    },
+    {
+      "description": "Docker tag upgrades need review; only digests are automatic",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "groupName": null,
+      "automerge": false
     }
   ]
 }
