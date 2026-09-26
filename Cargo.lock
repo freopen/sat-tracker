@@ -950,9 +950,9 @@ dependencies = [
 
 [[package]]
 name = "frankenstein"
-version = "0.52.0"
+version = "0.52.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90a1425d8390850aa1235656084c7c31ea87d8ba939cb244feef876c176a671f"
+checksum = "9ac41b3efdf616c36be9e544f1e6866cb4df69651b3c76ca2ab852fe57154885"
 dependencies = [
  "async-trait",
  "bon",
@@ -3262,7 +3262,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
