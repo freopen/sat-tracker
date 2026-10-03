@@ -11,7 +11,7 @@ RUN apt-get update \
     && echo 'vscode ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/vscode \
     && chmod 0440 /etc/sudoers.d/vscode
 
-COPY --from=ghcr.io/j178/prek:latest@sha256:f27d17a6b21959c5ba7d65039d72e9502c6951e79cbbfae2c1a0498a4859a5cb /prek /usr/local/bin/prek
+COPY --from=ghcr.io/j178/prek:latest@sha256:29fcc69b71f251c667288ed18b33c246b332378679b46233143721813a6f09c2 /prek /usr/local/bin/prek
 
 COPY --from=docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 /usr/local/bin/actionlint /usr/local/bin/actionlint
 
