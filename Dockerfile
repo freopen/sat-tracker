@@ -1,4 +1,4 @@
-FROM docker.io/library/debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS dev
+FROM docker.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS dev
 RUN chmod 1777 /tmp
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -11,7 +11,7 @@ RUN apt-get update \
     && echo 'vscode ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/vscode \
     && chmod 0440 /etc/sudoers.d/vscode
 
-COPY --from=ghcr.io/j178/prek:latest@sha256:325c8b622b7a262509a440df52ec47915799ec1cc7ddade5f92a43038d5ff16e /prek /usr/local/bin/prek
+COPY --from=ghcr.io/j178/prek:latest@sha256:f7425c2ed9a2b0232db9a3ebd33fc5d4d4526b60764cd73ba97c484bb37b50e5 /prek /usr/local/bin/prek
 
 COPY --from=docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 /usr/local/bin/actionlint /usr/local/bin/actionlint
 
