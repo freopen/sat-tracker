@@ -3,6 +3,17 @@
 Release-plz maintains this file from Conventional Commits starting with the next
 release. Earlier releases are recorded in Git history.
 
+## [0.6.5](https://github.com/freopen/sat-tracker/compare/v0.6.4...v0.6.5) - 2026-11-02
+
+### Fixed
+
+- *(deps)* lock file maintenance ([#54](https://github.com/freopen/sat-tracker/pull/54))
+- *(deps)* lock file maintenance ([#52](https://github.com/freopen/sat-tracker/pull/52))
+
+### Other
+
+- *(deps)* update compatible dependencies ([#51](https://github.com/freopen/sat-tracker/pull/51))
+
 ## [0.6.4](https://github.com/freopen/sat-tracker/compare/v0.6.3...v0.6.4) - 2026-10-26
 
 ### Fixed
