@@ -3,6 +3,22 @@
 Release-plz maintains this file from Conventional Commits starting with the next
 release. Earlier releases are recorded in Git history.
 
+## [0.6.5](https://github.com/freopen/sat-tracker/compare/v0.6.4...v0.6.5) - 2026-11-07
+
+### Fixed
+
+- *(deps)* update rust crate minijinja to v3
+- *(deps)* update rust crate mail-parser to v1
+- *(deps)* lock file maintenance ([#58](https://github.com/freopen/sat-tracker/pull/58))
+- *(deps)* lock file maintenance ([#54](https://github.com/freopen/sat-tracker/pull/54))
+- *(deps)* lock file maintenance ([#52](https://github.com/freopen/sat-tracker/pull/52))
+
+### Other
+
+- *(deps)* limit Renovate to one weekly grouped PR
+- *(deps)* update compatible dependencies ([#57](https://github.com/freopen/sat-tracker/pull/57))
+- *(deps)* update compatible dependencies ([#51](https://github.com/freopen/sat-tracker/pull/51))
+
 ## [0.6.4](https://github.com/freopen/sat-tracker/compare/v0.6.3...v0.6.4) - 2026-10-26
 
 ### Fixed
