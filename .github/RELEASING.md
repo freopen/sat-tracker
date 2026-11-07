@@ -11,11 +11,15 @@ release PRs, Git tags, and GitHub Releases; there are no custom release scripts.
   bump for `feat:` also applies before version 1.0. Use `docs:`, `build:`,
   `refactor:`, and `test:` where appropriate. Release-plz decides the final bump
   from all changes; breaking changes never qualify for patch auto-merge.
-- Renovate checks throughout the weekend in Europe/Zurich, groups compatible
-  Cargo, Actions, and Docker updates, and auto-merges them after tests. Its
-  `fix(deps): ...` commits participate in patch releases. Breaking dependency
-  upgrades need review; mark their squash commit `fix(deps)!:` if they introduce
-  a breaking change to the application. Renovate never bumps our crate version.
+- Renovate runs on Saturday morning in Europe/Zurich, bundles all non-security
+  Cargo, Actions, and Docker updates into a single weekly PR, and auto-merges
+  it after tests when every update in the PR is compatible. If the PR includes
+  a major upgrade, a pre-1.0 Cargo minor upgrade, or a Docker tag upgrade,
+  Renovate leaves the grouped PR open for review; mark its squash commit
+  `fix(deps)!:` if it introduces a breaking change to the application.
+  Vulnerability alerts still open immediate PRs outside the weekly schedule.
+  Its `fix(deps): ...` commits participate in patch releases, and Renovate never
+  bumps our crate version.
 - **Actions → Release-plz → Run workflow** on `main` creates or refreshes the
   release PR. Review its version and generated `CHANGELOG.md`, then merge it
   when ready. Manual runs do not enable auto-merge.

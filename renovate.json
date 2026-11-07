@@ -1,9 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", ":semanticCommitTypeAll(fix)"],
   "timezone": "Europe/Zurich",
-  "schedule": ["* * * * 0,6"],
+  "schedule": ["* 0-5 * * 6"],
+  "minimumReleaseAge": "3 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
   "prCreation": "immediate",
+  "prConcurrentLimit": 1,
+  "branchConcurrentLimit": 1,
   "automerge": false,
   "automergeType": "pr",
   "automergeStrategy": "squash",
@@ -13,15 +17,13 @@
   "semanticCommitType": "fix",
   "semanticCommitScope": "deps",
   "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": ["* * * * 0,6"]
+    "enabled": false
   },
   "packageRules": [
     {
-      "description": "Group compatible maintenance; release-plz owns application versions",
+      "description": "Bundle all non-security updates into a single weekly PR; release-plz owns application versions",
       "matchManagers": ["cargo", "github-actions", "dockerfile"],
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "pinDigest", "lockFileMaintenance"],
-      "groupName": "compatible dependencies",
+      "groupName": "dependencies",
       "automerge": true
     },
     {
@@ -29,11 +31,16 @@
       "rangeStrategy": "update-lockfile"
     },
     {
-      "description": "Pre-1.0 Cargo minor upgrades need review",
+      "description": "Major upgrades hold the weekly PR for manual review",
+      "matchManagers": ["cargo", "github-actions", "dockerfile"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "Pre-1.0 Cargo minor upgrades hold the weekly PR for manual review",
       "matchManagers": ["cargo"],
       "matchCurrentVersion": "/^0\\./",
       "matchUpdateTypes": ["minor"],
-      "groupName": null,
       "automerge": false
     },
     {
@@ -42,10 +49,9 @@
       "pinDigests": true
     },
     {
-      "description": "Docker tag upgrades need review; only digests are automatic",
+      "description": "Docker tag upgrades hold the weekly PR for manual review; only digests auto-merge",
       "matchManagers": ["dockerfile"],
       "matchUpdateTypes": ["major", "minor", "patch"],
-      "groupName": null,
       "automerge": false
     }
   ]
