@@ -1,7 +1,7 @@
 use crate::time::{DateTimeUtc, now};
 use crate::{app::Ctx, db::tracker};
 use chrono::Duration;
-use minijinja::{Environment, Error, ErrorKind, UndefinedBehavior, Value};
+use minijinja::{Environment, Error, ErrorKind, UndefinedBehavior, Value, value::Serde};
 use regex::Regex;
 use sea_orm::TryIntoModel;
 use serde::{Deserialize, Serialize};
@@ -194,7 +194,7 @@ fn render_named<S: serde::Serialize>(
     let text = environment
         .get_template(name)
         .map_err(|error| anyhow::anyhow!("template lookup failed: {}", error.kind()))?
-        .render(value)
+        .render(Serde(value))
         .map_err(|error| anyhow::anyhow!("template rendering failed: {}", error.kind()))?;
     validate_rendered(text)
 }
@@ -208,14 +208,16 @@ fn render_source<S: serde::Serialize>(
         source.len() <= MAX_TEMPLATE_BYTES,
         "template is too large (maximum {MAX_TEMPLATE_BYTES} bytes)"
     );
-    let text = environment.render_str(source, value).map_err(|error| {
-        let stage = if error.kind() == ErrorKind::SyntaxError {
-            "compilation"
-        } else {
-            "rendering"
-        };
-        anyhow::anyhow!("template {stage} failed: {}", error.kind())
-    })?;
+    let text = environment
+        .render_str(source, Serde(value))
+        .map_err(|error| {
+            let stage = if error.kind() == ErrorKind::SyntaxError {
+                "compilation"
+            } else {
+                "rendering"
+            };
+            anyhow::anyhow!("template {stage} failed: {}", error.kind())
+        })?;
     validate_rendered(text)
 }
 
@@ -261,7 +263,7 @@ fn example_recovery_tracker() -> tracker::Model {
 
 fn markdown_formatter(
     output: &mut minijinja::Output<'_>,
-    _state: &minijinja::State,
+    _state: &mut minijinja::State,
     value: &Value,
 ) -> Result<(), Error> {
     if value.is_undefined() {
@@ -383,7 +385,7 @@ fn datetime_filter(value: Value, format: &str) -> Result<Value, Error> {
                 "datetime filter expects an RFC 3339 timestamp",
             )
         })?;
-    Ok(Value::from_iter([
+    Ok(Value::from_pairs([
         (DATETIME_VALUE_FIELD, value),
         (DATETIME_FORMAT_FIELD, format.into()),
     ]))
@@ -432,19 +434,19 @@ mod tests {
 
         assert_eq!(
             environment
-                .render_str("{{ last_ok_at }}", &tracker)
+                .render_str("{{ last_ok_at }}", Serde(&tracker))
                 .expect("bare timestamp renders"),
             expected("r")
         );
         assert_eq!(
             environment
-                .render_str("{{ last_ok_at | date }}", &tracker)
+                .render_str("{{ last_ok_at | date }}", Serde(&tracker))
                 .expect("date filter renders"),
             expected("d")
         );
         assert_eq!(
             environment
-                .render_str("{{ last_ok_at | time }}", &tracker)
+                .render_str("{{ last_ok_at | time }}", Serde(&tracker))
                 .expect("time filter renders"),
             expected("t")
         );
@@ -458,7 +460,7 @@ mod tests {
 
         assert_eq!(
             environment
-                .render_str("{{ location }}", &tracker)
+                .render_str("{{ location }}", Serde(&tracker))
                 .expect("comma-separated location renders"),
             r#"<tg-map lat="-10.4217" long="105.6791" zoom="16"/>"#
         );
@@ -466,7 +468,7 @@ mod tests {
         tracker.location = Some(tracker::Location(47.3769, 8.5417));
         assert_eq!(
             environment
-                .render_str("{{ location }}", &tracker)
+                .render_str("{{ location }}", Serde(&tracker))
                 .expect("JSON location renders"),
             r#"<tg-map lat="47.3769" long="8.5417" zoom="16"/>"#
         );
@@ -500,12 +502,12 @@ mod tests {
     #[test]
     fn inline_control_lines_have_explicit_whitespace() {
         let environment = new_environment("unused", "unused").expect("valid environment");
-        assert!(!environment.trim_blocks());
-        assert!(!environment.lstrip_blocks());
+        assert!(!environment.syntax().trim_blocks());
+        assert!(!environment.syntax().lstrip_blocks());
         let source = "Title\n\n{% if last_alert is not none %}Message: {{ last_alert }}{% endif %}\n{% if location is not none %}Location: {{ location }}{% endif %}\nAfter";
         let with_optional = example_tracker(true);
         let rendered = environment
-            .render_str(source, &with_optional)
+            .render_str(source, Serde(&with_optional))
             .expect("template renders");
         assert_eq!(
             rendered,
