@@ -504,7 +504,7 @@ async fn enqueue(
 
 fn mail_message_id(payload: &[u8]) -> Option<String> {
     mail_parser::MessageParser::default()
-        .parse(payload)
+        .parse_headers(payload)
         .and_then(|mail| mail.message_id().map(str::to_owned))
 }
 
