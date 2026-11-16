@@ -3,6 +3,12 @@
 Release-plz maintains this file from Conventional Commits starting with the next
 release. Earlier releases are recorded in Git history.
 
+## [0.6.6](https://github.com/freopen/sat-tracker/compare/v0.6.5...v0.6.6) - 2026-11-16
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.6.5](https://github.com/freopen/sat-tracker/compare/v0.6.4...v0.6.5) - 2026-11-07
 
 ### Fixed
